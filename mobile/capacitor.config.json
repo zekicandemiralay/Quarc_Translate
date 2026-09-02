@@ -1,0 +1,9 @@
+{
+  "appId": "com.quarc.translate",
+  "appName": "Quarc Translate",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#121212"
+  }
+}

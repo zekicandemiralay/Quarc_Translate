@@ -1,0 +1,61 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    volumes:
+      - translate_data:/app/data
+    environment:
+      - PORT=3005
+      - DB_PATH=/app/data/translate.db
+      - JWT_SECRET=${JWT_SECRET:-insecure-default-change-in-production}
+      - LIBRETRANSLATE_URL=http://translate-engine:5000
+    restart: unless-stopped
+    depends_on:
+      - translate-engine
+    networks:
+      - app-network
+
+  # Self-hosted translation engine (LibreTranslate) — free, keyless, never
+  # leaves your own server. Not published to the host; only `backend` talks
+  # to it, over the internal app-network. First start downloads the
+  # language models into `translate_models` (a few minutes); every start
+  # after that is fast since the volume persists them.
+  translate-engine:
+    image: libretranslate/libretranslate:latest
+    environment:
+      - LT_DISABLE_WEB_UI=true
+      - LT_API_KEYS=false
+      - LT_UPDATE_MODELS=false
+      - LT_LOAD_ONLY=${LT_LOAD_ONLY:-en,tr,de,fr,es,it,pt,ru,ar,zh,ja,ko,nl,pl,sv,el,hi,id,vi,uk,cs,fi,da,ro,hu,bg,sk,fa,he}
+    volumes:
+      - translate_models:/home/libretranslate/.local
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "4003:443"
+    volumes:
+      - /var/lib/tailscale/certs:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - app-network
+      # Lets nginx reach the quarc-auth container by name for /api/auth/*.
+      - quarcnet-shared
+
+networks:
+  app-network:
+    driver: bridge
+  quarcnet-shared:
+    external: true
+
+volumes:
+  translate_data:
+  translate_models:

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Quarc Translate</string>
+    <string name="title_activity_main">Quarc Translate</string>
+    <string name="package_name">com.quarc.translate</string>
+    <string name="custom_url_scheme">com.quarc.translate</string>
+</resources>

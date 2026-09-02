@@ -1,0 +1,72 @@
+{
+  "app": {
+    "name": "Quarc Translate",
+    "loading": "Yükleniyor…",
+    "delete": "Sil"
+  },
+  "auth": {
+    "signInToAccount": "Quarc hesabınızla giriş yapın",
+    "username": "Kullanıcı adı",
+    "password": "Şifre",
+    "login": "Giriş yap",
+    "signup": "Kayıt ol",
+    "needAccount": "Hesabınız yok mu? Kayıt olun",
+    "haveAccount": "Zaten hesabınız var mı? Giriş yapın",
+    "sharedNote": "Quarc Music, Notes ve Weather ile aynı hesap",
+    "logout": "Çıkış yap"
+  },
+  "nav": {
+    "translate": "Çeviri",
+    "history": "Geçmiş",
+    "settings": "Ayarlar"
+  },
+  "translate": {
+    "detectLanguage": "Dili algıla",
+    "sourcePlaceholder": "Metin girin",
+    "translationPlaceholder": "Çeviri",
+    "swapLanguages": "Dilleri değiştir",
+    "clear": "Temizle",
+    "copy": "Kopyala",
+    "copied": "Kopyalandı",
+    "charLimit": "{{count}} / {{limit}}",
+    "translating": "Çevriliyor…",
+    "star": "Favorilere ekle",
+    "unstar": "Favorilerden çıkar",
+    "engineUnavailable": "Çeviri motoru şu anda kullanılamıyor",
+    "tooLong": "Metin çok uzun"
+  },
+  "history": {
+    "title": "Geçmiş",
+    "empty": "Henüz çeviri yok",
+    "emptyHint": "Yaptığınız çeviriler burada görünecek.",
+    "favoritesOnly": "Favoriler",
+    "all": "Tümü",
+    "clear": "Temizle",
+    "clearConfirm": "Tüm geçmiş silinsin mi? Favoriler korunacak.",
+    "clearAllConfirm": "Favoriler dahil her şey silinsin mi?",
+    "reuse": "Tekrar kullan"
+  },
+  "settings": {
+    "title": "Ayarlar",
+    "defaults": "Varsayılan diller",
+    "defaultSource": "Kaynak dil",
+    "defaultTarget": "Hedef dil",
+    "appearance": "Görünüm",
+    "theme": "Tema",
+    "themeAuto": "Otomatik",
+    "themeLight": "Açık",
+    "themeDark": "Koyu",
+    "language": "Uygulama dili",
+    "account": "Hesap",
+    "signedInAs": "{{username}} olarak giriş yapıldı",
+    "about": "Hakkında",
+    "version": "Sürüm",
+    "checkForUpdates": "Güncellemeleri kontrol et",
+    "checking": "Kontrol ediliyor…",
+    "upToDate": "En güncel sürümdesiniz",
+    "updateAvailable": "{{version}} sürümü mevcut",
+    "install": "Yükle",
+    "downloadPage": "İndirme sayfasını aç",
+    "updateFailed": "Güncellemeler kontrol edilemedi"
+  }
+}
