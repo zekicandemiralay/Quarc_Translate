@@ -9,6 +9,18 @@ RUN pip install --no-cache-dir \
       --extra-index-url https://download.pytorch.org/whl/cpu \
       -r requirements.txt
 
+# CTranslate2's published wheel ships a library that requests an executable
+# stack. Kernels that refuse it fail the import outright:
+#   ImportError: libctranslate2-<hash>.so.4.5.0: cannot enable executable
+#   stack as shared object requires: Invalid argument
+# ...which crash-loops the container. Clear the flag, then prove the library
+# actually loads — `docker build` runs on the same kernel as the container, so
+# this turns a production crash-loop into an honest build failure.
+COPY fix_execstack.py ./
+RUN find /usr/local/lib/python3.11/site-packages -path '*ctranslate2*' -name '*.so*' \
+      -exec python fix_execstack.py {} + \
+    && python -c "import ctranslate2; print('ctranslate2', ctranslate2.__version__, 'loaded OK')"
+
 COPY *.py ./
 
 # Models are downloaded and converted on first use into this volume, not baked
