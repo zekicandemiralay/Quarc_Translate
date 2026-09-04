@@ -12,9 +12,12 @@
 
 ## Generate icons (one-time)
 
-`logo.png` in this folder is a placeholder — swap it for real branding before
-generating icons if you want something other than the generated exchange-arrows
-mark. Needs to be square, at least 1024×1024. From the `desktop/` folder, run:
+`logo.png` in this folder is the real Quarc Translate mark (from
+`QuarcNet/logos/bg_removed/`), but it's only 360×360 — smaller than the
+1024×1024+ Tauri recommends for generating every icon size without upscaling
+blur. It's fine to generate from as-is; for crisper large icons, re-export a
+higher-resolution version from the original source art first. From the
+`desktop/` folder, run:
 
 ```
 npx tauri icon path\to\your-icon.png

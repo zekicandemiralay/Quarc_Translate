@@ -182,10 +182,11 @@ for Quarc Music.
 - **Desktop (Windows/macOS/Linux):** see [desktop/BUILD.md](desktop/BUILD.md) — a
   Tauri wrapper around the same web app.
 - **Mobile (Android):** the `mobile/` folder is a Capacitor project pointing at
-  the same server. `logo.png`/`mobile/resources/icon.png` are placeholders —
-  swap them for real branding, then regenerate platform icons with
-  `npx @capacitor/assets generate` (mobile) and `npx tauri icon` (desktop)
-  before a real release.
+  the same server. `logo.png` / `mobile/resources/icon.png` are the real mark
+  (from `QuarcNet/logos/bg_removed/`) but only 360×360 — regenerate platform
+  icons with `npx @capacitor/assets generate` (mobile) and `npx tauri icon`
+  (desktop) any time; for crisper large icons, source a higher-resolution
+  export first.
 
 ## Releasing new app builds
 
