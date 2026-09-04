@@ -159,9 +159,23 @@ if [ -n "$BACKEND" ]; then
       .then(langs => { console.log(langs.length); process.exit(0); })
       .catch(() => process.exit(1))
   " > /tmp/lt_langs 2>/dev/null; then
-    ok "backend can reach translate-engine ($(cat /tmp/lt_langs 2>/dev/null) languages loaded)"
+    ok "backend can reach translate-engine ($(cat /tmp/lt_langs 2>/dev/null) languages available)"
   else
-    bad "backend cannot reach translate-engine — it may still be downloading language models on first start (check: docker compose logs translate-engine)"
+    bad "backend cannot reach translate-engine (check: docker compose logs translate-engine)"
+  fi
+
+  # Which models are actually resident. Empty right after a cold start is
+  # normal — the first pair downloads and converts in the background.
+  LOADED=$(docker exec "$BACKEND" node -e "
+    fetch('http://translate-engine:5000/health')
+      .then(r => r.json())
+      .then(h => { console.log((h.loaded || []).length); process.exit(0); })
+      .catch(() => process.exit(1))
+  " 2>/dev/null)
+  if [ -n "$LOADED" ] && [ "$LOADED" != "0" ]; then
+    ok "$LOADED translation model(s) loaded in memory"
+  else
+    warn "no translation model loaded yet — the first pair is still downloading/converting (docker compose logs -f translate-engine)"
   fi
 fi
 

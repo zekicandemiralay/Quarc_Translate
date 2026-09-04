@@ -1,6 +1,11 @@
 .env
 .claude/
 node_modules/
+# Proton Drive writes these when two devices touch the same path. They're
+# duplicates of already-ignored paths, but the renamed directory dodges the
+# patterns above — e.g. "node_modules (# Name clash 2026-09-04 abc #)".
+*Name clash*
+__pycache__/
 backend/data/
 frontend/dist/
 mobile/www/*

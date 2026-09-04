@@ -2,7 +2,8 @@
   "app": {
     "name": "Quarc Translate",
     "loading": "Yükleniyor…",
-    "delete": "Sil"
+    "delete": "Sil",
+    "close": "Kapat"
   },
   "auth": {
     "signInToAccount": "Quarc hesabınızla giriş yapın",

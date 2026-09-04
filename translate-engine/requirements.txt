@@ -1,0 +1,12 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+ctranslate2==4.5.0
+transformers==4.47.1
+sentencepiece==0.2.0
+# Pure-Python language identification — no native build step, so the image
+# can't fail to build over a compiler toolchain. Less accurate on very short
+# input than fasttext's lid.176, which is the upgrade path if it disappoints.
+py3langid==0.3.0
+# Only imported during first-run model conversion (see models.py), never at
+# request time. CPU wheel — the GPU build is ~2GB more for nothing here.
+torch==2.5.1

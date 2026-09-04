@@ -16,20 +16,30 @@ services:
     networks:
       - app-network
 
-  # Self-hosted translation engine (LibreTranslate) — free, keyless, never
-  # leaves your own server. Not published to the host; only `backend` talks
-  # to it, over the internal app-network. First start downloads the
-  # language models into `translate_models` (a few minutes); every start
-  # after that is fast since the volume persists them.
+  # Self-hosted translation engine — free, keyless, fully offline once its
+  # models are downloaded. Not published to the host; only `backend` talks to
+  # it, over the internal app-network.
+  #
+  # Turkish<->English runs on Helsinki OPUS-MT tc-big (trained for that pair);
+  # every other pair runs on NLLB-200. Models download and convert to
+  # CTranslate2 int8 on first use into `translate_models`, so the first
+  # translation of a new pair is slow and every one after it is fast.
   translate-engine:
-    image: libretranslate/libretranslate:latest
+    build:
+      context: ./translate-engine
+      dockerfile: Dockerfile
     environment:
-      - LT_DISABLE_WEB_UI=true
-      - LT_API_KEYS=false
-      - LT_UPDATE_MODELS=false
-      - LT_LOAD_ONLY=${LT_LOAD_ONLY:-en,tr,de,fr,es,it,pt,ru,ar,zh,ja,ko,nl,pl,sv,el,hi,id,vi,uk,cs,fi,da,ro,hu,bg,sk,fa,he}
+      # How many models may sit in RAM at once (LRU). Each is roughly
+      # 300MB (OPUS-MT) to 700MB (NLLB) at int8 — raise only if the host
+      # has memory to spare, since this box already runs every other Quarc app.
+      - MAX_LOADED_MODELS=${MAX_LOADED_MODELS:-2}
+      # CPU threads per translation. Leaves headroom on a 12-core box.
+      - TRANSLATE_THREADS=${TRANSLATE_THREADS:-4}
+      # Pair preloaded at startup so the first real translation isn't the one
+      # that pays for conversion. Set to "" to skip.
+      - WARM_PAIR=${WARM_PAIR:-tr:en}
     volumes:
-      - translate_models:/home/libretranslate/.local
+      - translate_models:/models
     restart: unless-stopped
     networks:
       - app-network

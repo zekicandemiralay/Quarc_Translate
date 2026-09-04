@@ -1,6 +1,8 @@
-// Talks to the self-hosted LibreTranslate container (see docker-compose.yml,
-// service `translate-engine`) — free, keyless, and never leaves your own
-// server, same philosophy as Weather using Open-Meteo instead of a paid API.
+// Talks to the self-hosted translation engine (see docker-compose.yml, service
+// `translate-engine`) — free, keyless, and never leaves your own server, same
+// philosophy as Weather using Open-Meteo instead of a paid API. It keeps
+// LibreTranslate's HTTP shape, which is why swapping the models behind it
+// needed no changes here.
 const cache = require('./cache');
 
 const BASE_URL = () => process.env.LIBRETRANSLATE_URL || 'http://translate-engine:5000';

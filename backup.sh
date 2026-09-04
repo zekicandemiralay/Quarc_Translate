@@ -8,9 +8,9 @@
 #    translate.db — translation history, favorites, and per-user preferences
 #    .env         — all secrets and config
 #
-#  Note: downloaded LibreTranslate language models are NOT backed up — they
-#  redownload automatically into the translate_models volume on first start
-#  from LT_LOAD_ONLY. Only history/favorites/prefs are irreplaceable.
+#  Note: downloaded translation models are NOT backed up — they redownload
+#  automatically into the translate_models volume on first use. Only
+#  history/favorites/prefs are irreplaceable.
 # ============================================================
 set -e
 

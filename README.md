@@ -17,11 +17,23 @@ language (or let it auto-detect), and get a live translation as you type.
   support — install from [Releases](https://github.com/zekicandemiralay/Quarc_Translate/releases/latest)
   or just use the browser
 
-**Translation engine:** [LibreTranslate](https://libretranslate.com), self-hosted
-as its own container (`translate-engine` in `docker-compose.yml`). Free, keyless,
-open source, and your text never leaves your own server — no Google/DeepL API
-key to pay for or manage, same "no external account needed" philosophy as
-Weather using Open-Meteo instead of a paid weather API.
+**Translation engine:** self-hosted in its own container (`translate-engine` in
+`docker-compose.yml`) — free, keyless, no quota, and your text never leaves your
+own server. Same "no external account needed" philosophy as Weather using
+Open-Meteo instead of a paid weather API.
+
+- **Turkish↔English** runs on [Helsinki OPUS-MT `tc-big`](https://huggingface.co/Helsinki-NLP/opus-mt-tc-big-tr-en),
+  trained specifically for that pair
+- **Every other pair** runs on [NLLB-200](https://huggingface.co/facebook/nllb-200-distilled-600M),
+  one model covering ~200 languages
+- Both run through [CTranslate2](https://github.com/OpenNMT/CTranslate2) at int8,
+  which is roughly a third the memory of the same models under PyTorch — this
+  box also runs every other Quarc app
+- Models download and convert on first use into the `translate_models` volume,
+  so the first translation of a new language pair is slow (a few minutes) and
+  every one after it is fast
+
+This replaced LibreTranslate, whose Argos models were notably weak on Turkish.
 
 ---
 
@@ -36,8 +48,10 @@ For the person who owns and runs the server.
 - Tailscale HTTPS Certificates enabled in the admin console
 - The shared `quarc-auth` service already running (it lives in the Quarc_Notes repo
   under `auth/` — see that README). Every Quarc app depends on it for login.
-- A few GB of free disk for the LibreTranslate language models (downloaded once,
-  on first start, into a Docker volume)
+- A few GB of free disk for the translation models (downloaded once, on first
+  use, into a Docker volume)
+- ~1GB of free RAM for the translation engine (two models resident by default —
+  tune with `MAX_LOADED_MODELS`)
 
 ---
 
@@ -67,8 +81,8 @@ Get the current value from the running auth container:
 docker exec quarc-auth printenv JWT_SECRET
 ```
 
-Optionally set `LT_LOAD_ONLY` to trim which languages the translation engine
-downloads (smaller image, faster first start). See the comment in `.env.example`.
+The translation settings in `.env.example` are all optional — the defaults are
+tuned for a small shared box. Lower `MAX_LOADED_MODELS` to 1 if RAM is tight.
 
 ---
 
@@ -88,10 +102,11 @@ Without it the frontend container can't resolve `quarc-auth` and every login fai
 bash deploy.sh
 ```
 
-The first start downloads LibreTranslate's language models — this can take a
-few minutes depending on how many languages `LT_LOAD_ONLY` includes. Watch
-progress with `docker compose logs -f translate-engine`. Every start after
-that is fast, since the models persist in the `translate_models` volume.
+The app is usable immediately, but the first Turkish↔English translation waits
+on that model downloading and converting in the background (a few minutes).
+Watch it with `docker compose logs -f translate-engine`. Every start after that
+is fast, since converted models persist in the `translate_models` volume. The
+first use of any *other* language pair pays the same one-time cost.
 
 ---
 
@@ -136,9 +151,8 @@ bash backup.sh                      # creates ./backup_YYYYMMDD_HHMMSS/
 bash restore.sh ./backup_2026...    # on the new server
 ```
 
-Only history/favorites/preferences are backed up — the LibreTranslate language
-models redownload automatically on first start from `LT_LOAD_ONLY`, so there's
-nothing else worth preserving.
+Only history/favorites/preferences are backed up — the translation models
+redownload automatically on first use, so there's nothing else worth preserving.
 
 ---
 
@@ -152,8 +166,8 @@ nothing else worth preserving.
 | Quarc Weather | 4002 | 3004 |
 | **Quarc Translate** | **4003** | **3005** |
 
-The translation engine (`translate-engine`, LibreTranslate) is internal-only —
-it isn't published to the host, only `backend` talks to it.
+The translation engine (`translate-engine`) is internal-only — it isn't
+published to the host, only `backend` talks to it.
 
 ---
 
@@ -162,7 +176,9 @@ it isn't published to the host, only `backend` talks to it.
 | Variable | Default | Description |
 |---|---|---|
 | `JWT_SECRET` | *(insecure default)* | Must match `quarc-auth` exactly — this is what makes the shared login work |
-| `LT_LOAD_ONLY` | a broad default list | Comma-separated LibreTranslate language codes to download |
+| `MAX_LOADED_MODELS` | `2` | Translation models kept in RAM at once (LRU). ~300MB–700MB each at int8 |
+| `TRANSLATE_THREADS` | `4` | CPU threads per translation |
+| `WARM_PAIR` | `tr:en` | Pair preloaded at startup. Empty to skip |
 
 ---
 
