@@ -1,6 +1,12 @@
 const jwt = require('jsonwebtoken');
 
-const SECRET = () => process.env.JWT_SECRET || 'insecure-default-change-in-production';
+const SECRET = () => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret === 'insecure-default-change-in-production' || secret === 'change-this-to-a-long-random-string') {
+    throw new Error('JWT_SECRET is not configured. Set it to a long random string that matches quarc-auth.');
+  }
+  return secret;
+};
 
 function requireAuth(req, res, next) {
   const token = req.cookies?.token;
@@ -8,8 +14,8 @@ function requireAuth(req, res, next) {
   try {
     req.user = jwt.verify(token, SECRET());
     next();
-  } catch {
-    res.status(401).json({ error: 'Session expired' });
+  } catch (err) {
+    res.status(401).json({ error: 'Session expired', detail: err.message });
   }
 }
 

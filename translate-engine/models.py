@@ -30,7 +30,11 @@ os.environ.setdefault("HF_HOME", HF_CACHE)
 # Sentence-level models degrade badly on whole paragraphs, and silently
 # truncate past their token limit — so split, translate as a batch, rejoin.
 MAX_CHUNK_CHARS = 400
+# Maximum input text length to prevent abuse
+MAX_INPUT_CHARS = 5000
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
+# For CJK text without spaces, we need a fallback split point
+_CJK_CHAR = re.compile(r"[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u1100-\u11ff]")
 
 _lock = threading.Lock()
 _loaded = OrderedDict()  # hf_model_id -> (translator, tokenizer)
@@ -52,40 +56,70 @@ def _ensure_converted(model_id):
 
     os.makedirs(CT2_DIR, exist_ok=True)
     tmp_dir = out_dir + ".tmp"
-    converter = TransformersConverter(model_id, load_as_float16=False)
-    converter.convert(tmp_dir, quantization="int8", force=True)
-    os.rename(tmp_dir, out_dir)  # atomic: a killed conversion can't look done
-    return out_dir
+    
+    try:
+        converter = TransformersConverter(model_id, load_as_float16=False)
+        converter.convert(tmp_dir, quantization="int8", force=True)
+        os.rename(tmp_dir, out_dir)  # atomic: a killed conversion can't look done
+        return out_dir
+    except Exception:
+        # Clean up temporary directory on failure
+        import shutil
+        if os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
 
 
 def _load(model_id):
     """Return (translator, tokenizer), loading and evicting as needed."""
+    # First check without lock (fast path for cache hits)
     with _lock:
         if model_id in _loaded:
             _loaded.move_to_end(model_id)
             return _loaded[model_id]
-
+        
+        # Mark as loading to prevent duplicate conversions
+        # Use a sentinel value to indicate loading is in progress
+        _loaded[model_id] = None  # Sentinel for "loading"
+    
     # Conversion and load happen outside the lock — they can take minutes on a
     # cold model, and holding the lock would stall unrelated language pairs.
-    ct2_path = _ensure_converted(model_id)
-    translator = ctranslate2.Translator(
-        ct2_path,
-        device="cpu",
-        compute_type="int8",
-        inter_threads=1,
-        intra_threads=THREADS,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=HF_CACHE)
-
-    with _lock:
-        if model_id in _loaded:  # another request won the race
+    try:
+        ct2_path = _ensure_converted(model_id)
+        translator = ctranslate2.Translator(
+            ct2_path,
+            device="cpu",
+            compute_type="int8",
+            inter_threads=1,
+            intra_threads=THREADS,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=HF_CACHE)
+        
+        with _lock:
+            # Check again - another request might have loaded it while we were converting
+            if _loaded[model_id] is not None:
+                # Another request won, use their result
+                _loaded.move_to_end(model_id)
+                # Clean up our loaded model since it wasn't used
+                del translator
+                return _loaded[model_id]
+            
+            # Store the loaded model
+            _loaded[model_id] = (translator, tokenizer)
             _loaded.move_to_end(model_id)
+            
+            # Evict old models if over limit
+            while len(_loaded) > MAX_LOADED_MODELS:
+                _, (old_translator, _) = _loaded.popitem(last=False)
+                del old_translator
+            
             return _loaded[model_id]
-        _loaded[model_id] = (translator, tokenizer)
-        while len(_loaded) > MAX_LOADED_MODELS:
-            _, (old_translator, _) = _loaded.popitem(last=False)
-            del old_translator
-        return _loaded[model_id]
+    except Exception:
+        # Clean up the sentinel on error
+        with _lock:
+            if model_id in _loaded and _loaded[model_id] is None:
+                del _loaded[model_id]
+        raise
 
 
 def split_chunks(text):
@@ -104,14 +138,16 @@ def split_chunks(text):
                 if not sentence:
                     continue
                 # A single sentence longer than the model comfortably handles
-                # gets hard-split on spaces rather than truncated.
+                # gets hard-split on character boundaries rather than truncated.
                 while len(sentence) > MAX_CHUNK_CHARS:
+                    # Try to find a space to split on (for languages with spaces)
                     cut = sentence.rfind(" ", 0, MAX_CHUNK_CHARS)
                     if cut <= 0:
+                        # No space found (e.g., CJK text), split at MAX_CHUNK_CHARS
                         cut = MAX_CHUNK_CHARS
                     indices.append(len(chunks))
-                    chunks.append(sentence[:cut].strip())
-                    sentence = sentence[cut:].strip()
+                    chunks.append(sentence[:cut])
+                    sentence = sentence[cut:].lstrip()
                 if sentence:
                     indices.append(len(chunks))
                     chunks.append(sentence)
@@ -125,6 +161,10 @@ def _rejoin(translated, layout):
 
 def translate(text, source, target):
     """Translate `text` from `source` to `target` (both ISO-639-1 codes)."""
+    # Validate input length to prevent abuse and match backend limit
+    if len(text) > MAX_INPUT_CHARS:
+        raise ValueError(f"Text exceeds maximum length of {MAX_INPUT_CHARS} characters")
+    
     chunks, layout = split_chunks(text)
     if not chunks:
         return text

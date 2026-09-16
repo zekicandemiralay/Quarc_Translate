@@ -33,12 +33,24 @@ router.put('/', (req, res) => {
   // source_lang/target_lang are free-form codes (plus 'auto' for source),
   // validated client-side against the live LibreTranslate language list —
   // the server just stores whatever the picker sent so new language packs
-  // work without a server change.
+  // work without a server change. But we still need basic validation.
   if (typeof req.body?.source_lang === 'string' && req.body.source_lang.trim()) {
-    patch.source_lang = req.body.source_lang.trim();
+    const sourceLang = req.body.source_lang.trim();
+    // Only allow 'auto' or 2-3 character codes (with optional region)
+    if (sourceLang === 'auto' || /^[a-zA-Z]{2,3}(-[a-zA-Z]{2,3})?$/.test(sourceLang)) {
+      patch.source_lang = sourceLang;
+    } else {
+      return res.status(400).json({ error: 'source_lang must be "auto" or a valid language code (2-3 letters, optional region)' });
+    }
   }
   if (typeof req.body?.target_lang === 'string' && req.body.target_lang.trim()) {
-    patch.target_lang = req.body.target_lang.trim();
+    const targetLang = req.body.target_lang.trim();
+    // Target must be a 2-3 character code (no 'auto')
+    if (/^[a-zA-Z]{2,3}(-[a-zA-Z]{2,3})?$/.test(targetLang)) {
+      patch.target_lang = targetLang;
+    } else {
+      return res.status(400).json({ error: 'target_lang must be a valid language code (2-3 letters, optional region)' });
+    }
   }
 
   const db = getDb();

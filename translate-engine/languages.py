@@ -52,11 +52,40 @@ NLLB_MODEL = "facebook/nllb-200-distilled-600M"
 
 
 def is_supported(code):
-    return code in LANGUAGES
+    """Check if a language code is supported, with case-insensitive matching."""
+    if not code:
+        return False
+    # Try exact match first
+    if code in LANGUAGES:
+        return True
+    # Try lowercase
+    code_lower = code.lower()
+    if code_lower in LANGUAGES:
+        return True
+    # Try 2-character code from longer codes (e.g., "en-US" -> "en")
+    if len(code) > 2:
+        short_code = code[:2].lower()
+        if short_code in LANGUAGES:
+            return True
+    return False
 
 
 def nllb_code(code):
-    return LANGUAGES[code][1]
+    """Get NLLB FLORES-200 code for a language, with case-insensitive matching."""
+    # Try exact match first
+    if code in LANGUAGES:
+        return LANGUAGES[code][1]
+    # Try lowercase
+    code_lower = code.lower()
+    if code_lower in LANGUAGES:
+        return LANGUAGES[code_lower][1]
+    # Try 2-character code from longer codes
+    if len(code) > 2:
+        short_code = code[:2].lower()
+        if short_code in LANGUAGES:
+            return LANGUAGES[short_code][1]
+    # Return a default if code is not found (should not happen if validated first)
+    return LANGUAGES.get(code, LANGUAGES.get("en", ("English", "eng_Latn"))[1])
 
 
 def language_list():

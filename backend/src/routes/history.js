@@ -21,16 +21,30 @@ router.get('/', (req, res) => {
 
 router.patch('/:id/favorite', (req, res) => {
   const db = getDb();
-  const row = db.prepare('SELECT id FROM translations WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  const id = req.params.id;
+  
+  // Validate id is a valid UUID format
+  if (!id || typeof id !== 'string' || !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id)) {
+    return res.status(400).json({ error: 'Invalid translation ID format' });
+  }
+  
+  const row = db.prepare('SELECT id FROM translations WHERE id = ? AND user_id = ?').get(id, req.user.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
 
-  const favorite = req.body?.favorite ? 1 : 0;
-  db.prepare('UPDATE translations SET is_favorite = ? WHERE id = ?').run(favorite, req.params.id);
-  res.json({ id: req.params.id, is_favorite: favorite });
+  const favorite = req.body?.favorite !== undefined ? (req.body.favorite ? 1 : 0) : 0;
+  db.prepare('UPDATE translations SET is_favorite = ? WHERE id = ?').run(favorite, id);
+  res.json({ id, is_favorite: Boolean(favorite) });
 });
 
 router.delete('/:id', (req, res) => {
-  const result = getDb().prepare('DELETE FROM translations WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  const id = req.params.id;
+  
+  // Validate id is a valid UUID format
+  if (!id || typeof id !== 'string' || !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id)) {
+    return res.status(400).json({ error: 'Invalid translation ID format' });
+  }
+  
+  const result = getDb().prepare('DELETE FROM translations WHERE id = ? AND user_id = ?').run(id, req.user.id);
   if (result.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ ok: true });
 });
