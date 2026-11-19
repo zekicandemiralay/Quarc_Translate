@@ -12,15 +12,11 @@
 
 ## Generate icons (one-time)
 
-`logo.png` in this folder is the real Quarc Translate mark (from
-`QuarcNet/logos/bg_removed/`), but it's only 360×360 — smaller than the
-1024×1024+ Tauri recommends for generating every icon size without upscaling
-blur. It's fine to generate from as-is; for crisper large icons, re-export a
-higher-resolution version from the original source art first. From the
-`desktop/` folder, run:
+`logo.png` in this folder is the Quarc Translate logo (1024×1024, exported
+from the master `QuarcNet/logos/translate.svg`). From the `desktop/` folder, run:
 
 ```
-npx tauri icon path\to\your-icon.png
+npx tauri icon logo.png
 ```
 
 This writes all required files into `src-tauri/icons/`.
