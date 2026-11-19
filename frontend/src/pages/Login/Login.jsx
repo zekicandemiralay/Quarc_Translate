@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import useAuthStore from '../../store/authStore';
 import { apiUrl } from '../../lib/apiUrl';
+import StoreLoginButton from '../../components/StoreLoginButton';
 
 export default function Login() {
   const { t } = useTranslation();
@@ -50,6 +51,12 @@ export default function Login() {
           <h1 className="text-lg font-semibold">{t('auth.signInToAccount')}</h1>
           <p className="text-xs text-neutral-500 dark:text-neutral-400">{t('auth.sharedNote')}</p>
         </div>
+        <StoreLoginButton
+          onSignedIn={async () => {
+            await useAuthStore.getState().checkSession();
+            navigate('/');
+          }}
+        />
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <input
             className="rounded-lg border border-neutral-300 bg-transparent px-3 py-2 outline-none focus:border-accent dark:border-neutral-600"
