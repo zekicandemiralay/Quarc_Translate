@@ -1,29 +1,31 @@
 const jwt = require('jsonwebtoken');
+const { ApiError } = require('../errors');
 
-const SECRET = () => {
-  const secret = process.env.JWT_SECRET;
-  if (!secret || secret === 'insecure-default-change-in-production' || secret === 'change-this-to-a-long-random-string') {
-    throw new Error('JWT_SECRET is not configured. Set it to a long random string that matches quarc-auth.');
-  }
-  return secret;
-};
+const PLACEHOLDERS = new Set(['insecure-default-change-in-production', 'change-this-to-a-long-random-string']);
 
-function requireAuth(req, res, next) {
-  const token = req.cookies?.token;
-  if (!token) return res.status(401).json({ error: 'Not authenticated' });
-  try {
-    req.user = jwt.verify(token, SECRET());
-    next();
-  } catch (err) {
-    res.status(401).json({ error: 'Session expired', detail: err.message });
-  }
+/**
+ * Verifies the login cookie quarc-auth issued (same JWT_SECRET in every Quarc
+ * app — that is the whole shared-login mechanism). Reads the secret on every
+ * request so a misconfigured server answers 500 with a clear reason instead of
+ * crashing at start-up.
+ */
+function createAuth(getSecret) {
+  return function requireAuth(req, _res, next) {
+    const token = req.cookies?.token;
+    if (!token) return next(new ApiError(401, 'unauthenticated', 'Not authenticated'));
+
+    const secret = getSecret();
+    if (!secret || PLACEHOLDERS.has(secret)) {
+      return next(new ApiError(500, 'misconfigured', 'JWT_SECRET is not configured. Set it to the value quarc-auth uses.'));
+    }
+    try {
+      req.user = jwt.verify(token, secret);
+      if (!req.user?.id) throw new Error('token has no user id');
+      next();
+    } catch (err) {
+      next(new ApiError(401, 'session_expired', 'Session expired', { detail: err.message }));
+    }
+  };
 }
 
-function requireAdmin(req, res, next) {
-  requireAuth(req, res, () => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
-    next();
-  });
-}
-
-module.exports = { requireAuth, requireAdmin };
+module.exports = { createAuth };

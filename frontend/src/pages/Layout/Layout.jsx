@@ -1,9 +1,16 @@
 import { useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { History, Languages, Settings } from 'lucide-react';
 import useAuthStore from '../../store/authStore';
 import useUpdateStore from '../../store/updateStore';
 import UpdateBanner from '../../components/UpdateBanner';
+
+const ITEMS = [
+  { to: '/', key: 'translate', Icon: Languages, end: true },
+  { to: '/history', key: 'history', Icon: History },
+  { to: '/settings', key: 'settings', Icon: Settings },
+];
 
 export default function Layout() {
   const { t } = useTranslation();
@@ -16,44 +23,57 @@ export default function Layout() {
     ensureChecked();
   }, [ensureChecked]);
 
-  const linkClass = ({ isActive }) =>
-    `flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-      isActive
-        ? 'bg-accent text-white'
-        : 'text-neutral-700 hover:bg-neutral-200 dark:text-neutral-200 dark:hover:bg-neutral-700'
-    }`;
-
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <UpdateBanner update={update} onDismiss={dismissUpdate} />
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-        <aside className="safe-top flex flex-shrink-0 items-center justify-between gap-2 border-b border-neutral-200 bg-neutral-100 p-3 dark:border-neutral-700 dark:bg-neutral-800 md:w-56 md:flex-col md:items-stretch md:justify-start md:border-b-0 md:border-r md:p-4">
-          <div className="flex items-center gap-2 px-1">
-            <img src="/logo.png" alt="" className="h-7 w-7 rounded" />
+        {/* desktop: side rail */}
+        <aside className="hidden w-56 shrink-0 flex-col border-r border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900 md:flex">
+          <div className="flex items-center gap-2.5 px-1">
+            <img src="/logo.png" alt="" className="h-8 w-8 rounded-lg" />
             <span className="font-semibold">{t('app.name')}</span>
           </div>
-
-          <nav className="flex items-center gap-1 md:mt-6 md:flex-col md:items-stretch md:gap-1">
-            <NavLink to="/" end className={linkClass}>
-              🌐 <span className="hidden sm:inline">{t('nav.translate')}</span>
-            </NavLink>
-            <NavLink to="/history" className={linkClass}>
-              🕘 <span className="hidden sm:inline">{t('nav.history')}</span>
-            </NavLink>
-            <NavLink to="/settings" className={linkClass}>
-              ⚙️ <span className="hidden sm:inline">{t('nav.settings')}</span>
-            </NavLink>
+          <nav className="mt-6 flex flex-col gap-1" aria-label="Main">
+            {ITEMS.map(({ to, key, Icon, end }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={end}
+                data-testid={`nav-${key}`}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+                    isActive ? 'bg-accent-soft text-accent dark:bg-accent/20' : 'text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800'
+                  }`
+                }
+              >
+                <Icon size={19} aria-hidden="true" />
+                {t(`nav.${key}`)}
+              </NavLink>
+            ))}
           </nav>
-
-          <div className="hidden md:mt-auto md:block md:border-t md:border-neutral-200 md:pt-3 md:dark:border-neutral-700">
-            <p className="truncate px-1 text-xs text-neutral-500 dark:text-neutral-400">{user?.username}</p>
-          </div>
+          <p className="mt-auto truncate border-t border-neutral-200 px-1 pt-3 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">{user?.username}</p>
         </aside>
 
-        <main className="flex-1 overflow-y-auto">
+        <main className="min-h-0 flex-1 overflow-y-auto">
           <Outlet />
         </main>
+
+        {/* phone: tab bar */}
+        <nav className="safe-bottom flex shrink-0 border-t border-neutral-200 bg-white/95 backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95 md:hidden" aria-label="Main">
+          {ITEMS.map(({ to, key, Icon, end }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={end}
+              data-testid={`nav-${key}`}
+              className={({ isActive }) => `flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-medium ${isActive ? 'text-accent' : 'text-neutral-500 dark:text-neutral-400'}`}
+            >
+              <Icon size={22} aria-hidden="true" />
+              {t(`nav.${key}`)}
+            </NavLink>
+          ))}
+        </nav>
       </div>
     </div>
   );

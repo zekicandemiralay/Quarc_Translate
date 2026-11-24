@@ -3,8 +3,9 @@
 #  Quarc Translate — Health Check
 #    bash check.sh
 #
-#  Verifies containers, the shared auth wiring, SSL, the database,
-#  and reachability to the self-hosted translation engine.
+#  Verifies containers, the shared auth wiring, SSL, the database, and the
+#  self-hosted translation engine: which language packs are ready, memory and
+#  disk headroom, and a real translation end to end.
 #
 #  Run this on the server (Linux). Under Git Bash on Windows, MSYS rewrites
 #  container-absolute paths such as /app/data into C:/Program Files/Git/app/data,
@@ -210,43 +211,85 @@ fi
 echo ""
 echo "Translation engine"
 if [ -n "$BACKEND" ]; then
-  # Create temporary Node script for checking languages
-  LANG_CHECK_SCRIPT=$(mktemp /tmp/lang_check_XXXXXX.js 2>/dev/null || echo "/tmp/lang_check.js")
-  cat > "$LANG_CHECK_SCRIPT" << 'EOF'
-fetch('http://translate-engine:5000/languages')
-  .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-  .then(langs => { console.log(langs.length); process.exit(0); })
-  .catch(err => { console.error("Error:", err.message); process.exit(1); });
-EOF
-  
-  if docker cp "$LANG_CHECK_SCRIPT" "$BACKEND:/tmp/lang_check.js" 2>/dev/null && \
-     docker exec "$BACKEND" node /tmp/lang_check.js > /tmp/lt_langs 2>/dev/null; then
-    LANG_COUNT=$(cat /tmp/lt_langs 2>/dev/null || echo "0")
-    ok "backend can reach translate-engine ($LANG_COUNT languages available)"
-    rm -f /tmp/lt_langs
-  else
-    bad "backend cannot reach translate-engine (check: docker compose logs translate-engine)"
-  fi
-  rm -f "$LANG_CHECK_SCRIPT"
+  # One script, run inside the backend container (it can reach the engine by name).
+  # It prints "KEY value" lines that are turned into OK/WARN/FAIL below.
+  ENGINE_REPORT=$(docker exec -i "$BACKEND" node - 2>/dev/null <<'JS'
+const base = 'http://translate-engine:5000';
+const get = async (p) => { const r = await fetch(base + p, { signal: AbortSignal.timeout(8000) }); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); };
+(async () => {
+  try {
+    const h = await get('/health');
+    const langs = await get('/languages');
+    console.log('LANGS', langs.length);
+    console.log('VERSION', h.version);
+    console.log('RAM', h.ramUsedMb + '/' + h.ramBudgetMb);
+    console.log('LOADED', (h.loaded || []).length);
+    console.log('READY', (h.ready || []).length);
+    console.log('PREPARING', (h.preparing || []).map((m) => m.key + ':' + m.state + (m.pct != null ? ':' + m.pct + '%' : '')).join(',') || '-');
+    console.log('FAILED', (h.failed || []).map((m) => m.key + ': ' + m.error).join(' | ') || '-');
+  } catch (e) { console.log('DOWN', e.message); return; }
+  // A real translation, if the Turkish pack is already there (this never forces a download).
+  try {
+    const r = await fetch(base + '/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: 'Thank you very much.', source: 'en', target: 'tr' }), signal: AbortSignal.timeout(60000) });
+    const j = await r.json();
+    if (r.ok) console.log('TRANSLATE_OK', JSON.stringify(j.translatedText), (j.route && j.route.ms) + 'ms');
+    else if (r.status === 503) console.log('TRANSLATE_WAIT', j.detail && j.detail.stage);
+    else console.log('TRANSLATE_FAIL', r.status, JSON.stringify(j.detail || j));
+  } catch (e) { console.log('TRANSLATE_FAIL', e.message); }
+})();
+JS
+) || true
 
-  # Which models are actually resident. Empty right after a cold start is
-  # normal — the first pair downloads and converts in the background.
-  HEALTH_CHECK_SCRIPT=$(mktemp /tmp/health_check_XXXXXX.js 2>/dev/null || echo "/tmp/health_check.js")
-  cat > "$HEALTH_CHECK_SCRIPT" << 'EOF'
-fetch('http://translate-engine:5000/health')
-  .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-  .then(h => { console.log((h.loaded || []).length); process.exit(0); })
-  .catch(err => { console.error("Error:", err.message); process.exit(1); });
-EOF
-  
-  LOADED=$(docker cp "$HEALTH_CHECK_SCRIPT" "$BACKEND:/tmp/health_check.js" 2>/dev/null && \
-            docker exec "$BACKEND" node /tmp/health_check.js 2>/dev/null || echo "")
-  rm -f "$HEALTH_CHECK_SCRIPT"
-  
-  if [ -n "$LOADED" ] && [ "$LOADED" != "0" ]; then
-    ok "$LOADED translation model(s) loaded in memory"
+  if echo "$ENGINE_REPORT" | grep -q '^LANGS'; then
+    ok "engine answers ($(echo "$ENGINE_REPORT" | awk '/^LANGS/{print $2}') languages, v$(echo "$ENGINE_REPORT" | awk '/^VERSION/{print $2}'))"
+    ok "language packs on disk: $(echo "$ENGINE_REPORT" | awk '/^READY/{print $2}'), in memory: $(echo "$ENGINE_REPORT" | awk '/^LOADED/{print $2}')"
+    echo "         memory used by models: $(echo "$ENGINE_REPORT" | awk '/^RAM/{print $2}') MB"
+
+    PREP=$(echo "$ENGINE_REPORT" | sed -n 's/^PREPARING //p')
+    if [ "$PREP" != "-" ] && [ -n "$PREP" ]; then
+      warn "still downloading: $PREP (normal after a fresh install — docker compose logs -f translate-engine)"
+    fi
+    FAILED=$(echo "$ENGINE_REPORT" | sed -n 's/^FAILED //p')
+    if [ "$FAILED" != "-" ] && [ -n "$FAILED" ]; then
+      bad "a language pack failed: $FAILED"
+    fi
+
+    case "$(echo "$ENGINE_REPORT" | grep '^TRANSLATE_' | head -1)" in
+      TRANSLATE_OK*)   ok "test translation: $(echo "$ENGINE_REPORT" | sed -n 's/^TRANSLATE_OK //p')" ;;
+      TRANSLATE_WAIT*) warn "English->Turkish pack not ready yet ($(echo "$ENGINE_REPORT" | sed -n 's/^TRANSLATE_WAIT //p')) — run this again in a few minutes" ;;
+      *)               bad "test translation failed: $(echo "$ENGINE_REPORT" | sed -n 's/^TRANSLATE_FAIL //p')" ;;
+    esac
   else
-    warn "no translation model loaded yet — the first pair is still downloading/converting (docker compose logs -f translate-engine)"
+    bad "backend cannot reach translate-engine ($(echo "$ENGINE_REPORT" | sed -n 's/^DOWN //p')) — docker compose logs translate-engine"
+  fi
+
+  # Room for language packs, and signs the engine ran out of memory.
+  ENGINE=$(docker ps -q --filter "label=com.docker.compose.service=translate-engine" | head -1)
+  if [ -n "$ENGINE" ]; then
+    FREE_MB=$(docker exec "$ENGINE" df -Pm /models 2>/dev/null | awk 'NR==2{print $4}')
+    if [ -n "$FREE_MB" ]; then
+      if [ "$FREE_MB" -lt 1500 ]; then
+        bad "only ${FREE_MB} MB free for language packs (each takes 0.1–1.4 GB)"
+      elif [ "$FREE_MB" -lt 4000 ]; then
+        warn "${FREE_MB} MB free for language packs — getting low"
+      else
+        ok "${FREE_MB} MB free for language packs"
+      fi
+    fi
+    OOM=$(docker inspect -f '{{.State.OOMKilled}}' "$ENGINE" 2>/dev/null || echo false)
+    RESTARTS=$(docker inspect -f '{{.RestartCount}}' "$ENGINE" 2>/dev/null || echo 0)
+    if [ "$OOM" = "true" ]; then
+      bad "the engine was killed for using too much memory — lower MODEL_RAM_MB or raise ENGINE_MEM_LIMIT in .env"
+    elif [ "${RESTARTS:-0}" -gt 3 ]; then
+      warn "the engine has restarted $RESTARTS times — docker compose logs translate-engine"
+    fi
+  fi
+  if command_exists free; then
+    AVAIL_MB=$(free -m | awk '/^Mem:/{print $7}')
+    if [ -n "$AVAIL_MB" ] && [ "$AVAIL_MB" -lt 1200 ]; then
+      warn "only ${AVAIL_MB} MB of RAM available on this machine"
+    fi
   fi
 else
   warn "backend container not running — cannot check translation engine"

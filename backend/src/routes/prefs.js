@@ -1,71 +1,75 @@
 const express = require('express');
-const router = express.Router();
-const { getDb } = require('../db');
+const { badRequest } = require('../errors');
 
-const DEFAULTS = {
-  source_lang: 'auto',
-  target_lang: 'en',
-  theme: 'auto',
-  language: 'en',
+// One table of what a preference is and how it is checked, so adding one is a
+// single line (and a column in db.js) instead of another block of if-statements.
+const LANG = /^[a-z]{2,3}$/;
+const isLang = (v) => typeof v === 'string' && LANG.test(v);
+
+const SPEC = {
+  source_lang: { default: 'auto', check: (v) => v === 'auto' || isLang(v), hint: '"auto" or a language code' },
+  target_lang: { default: 'en', check: isLang, hint: 'a language code' },
+  theme: { default: 'auto', check: (v) => ['auto', 'light', 'dark'].includes(v), hint: 'auto, light or dark' },
+  language: { default: 'en', check: (v) => ['en', 'tr'].includes(v), hint: 'en or tr' },
+  font_size: { default: 'm', check: (v) => ['s', 'm', 'l', 'xl'].includes(v), hint: 's, m, l or xl' },
+  live: { default: 1, check: (v) => typeof v === 'boolean' || v === 0 || v === 1, store: (v) => (v ? 1 : 0), out: (v) => v !== 0, hint: 'true or false' },
+  save_history: { default: 1, check: (v) => typeof v === 'boolean' || v === 0 || v === 1, store: (v) => (v ? 1 : 0), out: (v) => v !== 0, hint: 'true or false' },
+  recent_langs: {
+    default: '[]',
+    check: (v) => Array.isArray(v) && v.length <= 12 && v.every(isLang),
+    store: (v) => JSON.stringify([...new Set(v)]),
+    out: (v) => {
+      try {
+        return JSON.parse(v);
+      } catch {
+        return [];
+      }
+    },
+    hint: 'a list of up to 12 language codes',
+  },
 };
 
-const ALLOWED = {
-  theme: ['auto', 'light', 'dark'],
-  language: ['en', 'tr'],
-};
+const KEYS = Object.keys(SPEC);
 
-router.get('/', (req, res) => {
-  const row = getDb().prepare('SELECT * FROM prefs WHERE user_id = ?').get(req.user.id);
-  res.json(row ? { ...DEFAULTS, ...row } : { user_id: req.user.id, ...DEFAULTS });
-});
-
-router.put('/', (req, res) => {
-  const patch = {};
-  for (const [key, values] of Object.entries(ALLOWED)) {
-    const incoming = req.body?.[key];
-    if (incoming === undefined) continue;
-    if (!values.includes(incoming)) {
-      return res.status(400).json({ error: `${key} must be one of: ${values.join(', ')}` });
-    }
-    patch[key] = incoming;
+function shape(row, userId) {
+  const out = { user_id: userId };
+  for (const key of KEYS) {
+    const raw = row && row[key] !== undefined && row[key] !== null ? row[key] : SPEC[key].default;
+    out[key] = SPEC[key].out ? SPEC[key].out(raw) : raw;
   }
+  return out;
+}
 
-  // source_lang/target_lang are free-form codes (plus 'auto' for source),
-  // validated client-side against the live LibreTranslate language list —
-  // the server just stores whatever the picker sent so new language packs
-  // work without a server change. But we still need basic validation.
-  if (typeof req.body?.source_lang === 'string' && req.body.source_lang.trim()) {
-    const sourceLang = req.body.source_lang.trim();
-    // Only allow 'auto' or 2-3 character codes (with optional region)
-    if (sourceLang === 'auto' || /^[a-zA-Z]{2,3}(-[a-zA-Z]{2,3})?$/.test(sourceLang)) {
-      patch.source_lang = sourceLang;
-    } else {
-      return res.status(400).json({ error: 'source_lang must be "auto" or a valid language code (2-3 letters, optional region)' });
+function createPrefsRoutes({ db }) {
+  const router = express.Router();
+
+  router.get('/', (req, res) => {
+    res.json(shape(db.prepare('SELECT * FROM prefs WHERE user_id = ?').get(req.user.id), req.user.id));
+  });
+
+  router.put('/', (req, res) => {
+    const body = req.body || {};
+    const patch = {};
+    for (const key of KEYS) {
+      if (body[key] === undefined) continue;
+      if (!SPEC[key].check(body[key])) throw badRequest('invalid_pref', `${key} must be ${SPEC[key].hint}`);
+      patch[key] = SPEC[key].store ? SPEC[key].store(body[key]) : body[key];
     }
-  }
-  if (typeof req.body?.target_lang === 'string' && req.body.target_lang.trim()) {
-    const targetLang = req.body.target_lang.trim();
-    // Target must be a 2-3 character code (no 'auto')
-    if (/^[a-zA-Z]{2,3}(-[a-zA-Z]{2,3})?$/.test(targetLang)) {
-      patch.target_lang = targetLang;
-    } else {
-      return res.status(400).json({ error: 'target_lang must be a valid language code (2-3 letters, optional region)' });
-    }
-  }
 
-  const db = getDb();
-  const current = db.prepare('SELECT * FROM prefs WHERE user_id = ?').get(req.user.id) || DEFAULTS;
-  const merged = { ...DEFAULTS, ...current, ...patch, user_id: req.user.id };
+    const current = db.prepare('SELECT * FROM prefs WHERE user_id = ?').get(req.user.id) || {};
+    const merged = { user_id: req.user.id };
+    for (const key of KEYS) merged[key] = patch[key] ?? current[key] ?? SPEC[key].default;
 
-  db.prepare(
-    `INSERT INTO prefs (user_id, source_lang, target_lang, theme, language, updated_at)
-     VALUES (@user_id, @source_lang, @target_lang, @theme, @language, datetime('now'))
-     ON CONFLICT(user_id) DO UPDATE SET
-       source_lang = @source_lang, target_lang = @target_lang,
-       theme = @theme, language = @language, updated_at = datetime('now')`
-  ).run(merged);
+    db.prepare(
+      `INSERT INTO prefs (user_id, ${KEYS.join(', ')}, updated_at)
+       VALUES (@user_id, ${KEYS.map((k) => `@${k}`).join(', ')}, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       ON CONFLICT(user_id) DO UPDATE SET ${KEYS.map((k) => `${k} = @${k}`).join(', ')}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`
+    ).run(merged);
 
-  res.json(db.prepare('SELECT * FROM prefs WHERE user_id = ?').get(req.user.id));
-});
+    res.json(shape(db.prepare('SELECT * FROM prefs WHERE user_id = ?').get(req.user.id), req.user.id));
+  });
 
-module.exports = router;
+  return router;
+}
+
+module.exports = { createPrefsRoutes, SPEC };

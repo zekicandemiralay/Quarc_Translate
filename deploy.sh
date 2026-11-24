@@ -92,3 +92,7 @@ echo "Done."
 echo ""
 echo "Services status:"
 docker compose ps
+echo ""
+echo "Language packs download in the background the first time a language is used"
+echo "(the app shows the progress). To watch:  docker compose logs -f translate-engine"
+echo "To check everything:                     bash check.sh"

@@ -29,6 +29,11 @@ docker compose up -d backend 2>/dev/null || true
 sleep 3
 docker compose stop backend
 
+# A write-ahead file left by an earlier run would be replayed onto the restored database
+# and corrupt it, so remove any before the file goes in.
+echo "  · Removing leftover write-ahead files ..."
+docker compose run --rm --no-deps --entrypoint sh backend -c 'rm -f /app/data/translate.db-wal /app/data/translate.db-shm' 2>/dev/null || true
+
 echo "  · Restoring translate.db ..."
 BACKEND=$(docker ps -aq --filter "label=com.docker.compose.service=backend" | head -1)
 if [ -z "$BACKEND" ]; then

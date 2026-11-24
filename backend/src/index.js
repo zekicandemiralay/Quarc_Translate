@@ -1,85 +1,33 @@
-const express = require('express');
-const cors = require('cors');
-const cookieParser = require('cookie-parser');
-const { initDb, getDb } = require('./db');
-const { requireAuth } = require('./middleware/auth');
-const translateRoutes = require('./routes/translate');
-const historyRoutes = require('./routes/history');
-const prefsRoutes = require('./routes/prefs');
+const { loadConfig } = require('./config');
+const { initDb, closeDb } = require('./db');
+const { createEngineClient } = require('./services/engine');
+const { createApp } = require('./app');
 
-const app = express();
-const PORT = process.env.PORT || 3005;
+const config = loadConfig();
+const db = initDb();
+const engine = createEngineClient({
+  baseUrl: config.engineUrl,
+  timeoutMs: config.engineTimeoutMs,
+  concurrency: config.engineConcurrency,
+});
+const app = createApp({ config, db, engine });
 
-// Configure CORS with specific origin validation
-// Allows credentials for JWT cookies
-const corsOptions = {
-  origin: (origin, callback) => {
-    // Allow requests with no origin (e.g., curl, Postman)
-    if (!origin) return callback(null, true);
-    
-    // In production, validate against expected origins
-    // For Tailscale, this would typically be your Tailnet HTTPS domain
-    const allowedOrigins = process.env.ALLOWED_ORIGINS ? 
-      process.env.ALLOWED_ORIGINS.split(',') : [];
-    
-    // If no specific origins configured, allow all (development mode)
-    // This should be tightened in production
-    if (allowedOrigins.length === 0) {
-      return callback(null, true);
-    }
-    
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    
-    return callback(new Error(`Origin ${origin} not allowed by CORS`));
-  },
-  credentials: true,
-};
-
-app.use(cors(corsOptions));
-app.use(express.json({ limit: '1mb' }));
-app.use(cookieParser());
-
-app.get('/api/health', (_req, res) => {
-  try {
-    // Check database connectivity
-    const db = getDb();
-    db.prepare('SELECT 1').get();
-    res.json({ 
-      ok: true, 
-      service: 'quarc-translate-backend',
-      database: 'connected',
-      timestamp: new Date().toISOString()
-    });
-  } catch (err) {
-    res.status(503).json({ 
-      ok: false, 
-      service: 'quarc-translate-backend',
-      database: 'disconnected',
-      error: err.message,
-      timestamp: new Date().toISOString()
-    });
-  }
+const server = app.listen(config.port, () => {
+  console.log(`Quarc Translate backend listening on :${config.port} (engine: ${config.engineUrl})`);
+  console.log(
+    `CORS: own origin, the app wrappers${config.allowedOrigins.length ? `, ${config.allowedOrigins.join(', ')}` : ''}`
+  );
 });
 
-app.use('/api/translate', requireAuth, translateRoutes);
-app.use('/api/history', requireAuth, historyRoutes);
-app.use('/api/prefs', requireAuth, prefsRoutes);
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal server error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+function shutdown(signal) {
+  console.log(`${signal} received, shutting down`);
+  app.stop();
+  server.close(() => {
+    closeDb();
+    process.exit(0);
   });
-});
-
-initDb();
-
-app.listen(PORT, () => {
-  console.log(`Quarc Translate backend listening on :${PORT}`);
-  console.log(`NODE_ENV: ${process.env.NODE_ENV || 'production'}`);
-  console.log(`Allowed origins: ${process.env.ALLOWED_ORIGINS || 'all (insecure in production)'}`);
-});
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('unhandledRejection', (err) => console.error('unhandledRejection:', err));

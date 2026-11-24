@@ -2,14 +2,35 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
 }
 
 body {
-  @apply bg-neutral-50 text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100;
+  @apply bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Text size for the two translation panes (Settings → Text size). */
+:root {
+  --pane-size: 1.125rem;
+}
+[data-textsize='s'] {
+  --pane-size: 0.975rem;
+}
+[data-textsize='l'] {
+  --pane-size: 1.35rem;
+}
+[data-textsize='xl'] {
+  --pane-size: 1.65rem;
+}
+.pane-text {
+  font-size: var(--pane-size);
+  line-height: 1.5;
 }
 
 /* Respect the notch / gesture bar on phones and in the APK. */
@@ -18,6 +39,23 @@ body {
 }
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Keyboard focus is visible; mouse/touch focus stays quiet. */
+:focus-visible {
+  outline: 2px solid theme('colors.accent.DEFAULT');
+  outline-offset: 2px;
+}
+textarea:focus-visible,
+input:focus-visible {
+  outline: none;
+}
+
+.icon-btn {
+  @apply inline-flex h-9 w-9 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 disabled:pointer-events-none disabled:opacity-30 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100;
+}
+.icon-btn[data-active='true'] {
+  @apply bg-accent-soft text-accent dark:bg-accent/20;
 }
 
 @media (prefers-reduced-motion: reduce) {

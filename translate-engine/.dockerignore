@@ -1,0 +1,6 @@
+__pycache__
+.pytest_cache
+tests
+tools
+*.pyc
+*Name clash*

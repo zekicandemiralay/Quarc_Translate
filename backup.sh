@@ -25,14 +25,13 @@ if [ -z "$BACKEND" ]; then
   exit 1
 fi
 
-# translate.db runs in WAL mode — recent writes can sit in translate.db-wal,
-# which this script doesn't copy. Checkpoint it into the main file first so
-# the backup is complete and doesn't depend on -wal/-shm files.
-echo "  · Checkpointing WAL into translate.db ..."
-docker exec "$BACKEND" node -e "require('/app/src/db').getDb().pragma('wal_checkpoint(TRUNCATE)')" 2>/dev/null || true
-
-echo "  · Exporting translate.db ..."
-docker cp "$BACKEND:/app/data/translate.db" "$BACKUP_DIR/translate.db"
+# translate.db runs in WAL mode, so copying the live file could miss recent writes
+# or catch a half-written page. SQLite's online backup API writes a consistent
+# snapshot while the app keeps running (same approach as the Quarc Store's nightly backup).
+echo "  · Exporting translate.db (consistent online snapshot) ..."
+docker exec "$BACKEND" node -e "require('/app/src/db').getDb().backup('/tmp/translate-backup.db').then(() => process.exit(0), (e) => { console.error(e.message); process.exit(1); })"
+docker cp "$BACKEND:/tmp/translate-backup.db" "$BACKUP_DIR/translate.db"
+docker exec "$BACKEND" rm -f /tmp/translate-backup.db
 
 echo "  · Copying .env ..."
 cp .env "$BACKUP_DIR/.env"

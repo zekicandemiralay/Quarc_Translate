@@ -8,6 +8,8 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(UpdaterPlugin.class);
         registerPlugin(QuarcSsoPlugin.class);
+        // "Share → Quarc Translate" and "Translate" in the text-selection menu.
+        registerPlugin(IncomingTextPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

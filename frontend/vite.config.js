@@ -18,6 +18,7 @@ const apiProxy = {
 
 export default defineConfig({
   plugins: [react()],
+  test: { environment: 'node', include: ['src/**/*.test.js'] },
   server: { proxy: apiProxy },
   preview: { proxy: apiProxy },
 });

@@ -9,8 +9,11 @@ services:
       - PORT=3005
       - DB_PATH=/app/data/translate.db
       - JWT_SECRET=${JWT_SECRET:-insecure-default-change-in-production}
-      - LIBRETRANSLATE_URL=http://translate-engine:5000
-      - ENGINE_TIMEOUT=30000
+      - ENGINE_URL=http://translate-engine:5000
+      - ENGINE_TIMEOUT=${ENGINE_TIMEOUT:-45000}
+      # Extra web origins allowed to call the API with the login cookie (comma-separated).
+      # Not needed: the app's own address, the Android app and the desktop app are always allowed.
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3005/api/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1))"]
       interval: 30s
@@ -23,28 +26,37 @@ services:
     networks:
       - app-network
 
-  # Self-hosted translation engine — free, keyless, fully offline once its
-  # models are downloaded. Not published to the host; only `backend` talks to
-  # it, over the internal app-network.
+  # Self-hosted translation engine — free, keyless, and your text never leaves
+  # this machine. Not published to the host; only `backend` talks to it.
   #
-  # Turkish<->English runs on Helsinki OPUS-MT tc-big (trained for that pair);
-  # every other pair runs on NLLB-200. Models download and convert to
-  # CTranslate2 int8 on first use into `translate_models`, so the first
-  # translation of a new pair is slow and every one after it is fast.
+  # Pairs with a dedicated model (Turkish, German, French, Spanish, Italian,
+  # Portuguese and more <-> English) use it; pairs that have two dedicated halves go
+  # through English; everything else runs on NLLB-200 (~200 languages).
+  # Models are downloaded on first use into `translate_models` — the first
+  # translation of a new pair waits for that (the app shows progress), after
+  # that it is instant.
   translate-engine:
     build:
       context: ./translate-engine
       dockerfile: Dockerfile
     environment:
-      # How many models may sit in RAM at once (LRU). Each is roughly
-      # 300MB (OPUS-MT) to 700MB (NLLB) at int8 — raise only if the host
-      # has memory to spare, since this box already runs every other Quarc app.
-      - MAX_LOADED_MODELS=${MAX_LOADED_MODELS:-2}
-      # CPU threads per translation. Leaves headroom on a 12-core box.
+      # RAM the loaded models may use together (MB). The general model (NLLB 1.3B)
+      # is ~1.5 GB, a dedicated pair 0.1–0.3 GB. Least recently used go first.
+      - MODEL_RAM_MB=${MODEL_RAM_MB:-2600}
+      - MAX_LOADED_MODELS=${MAX_LOADED_MODELS:-0}
+      # "1.3B" (better) or "600M" (lighter) — for languages without a dedicated model.
+      - NLLB_MODEL=${NLLB_MODEL:-1.3B}
+      # "auto": chain two dedicated models through English when no direct one exists. "off": use NLLB.
+      - PIVOT=${PIVOT:-auto}
+      # Downloaded in the background after start so nobody waits for them later.
+      - PREPARE_ON_START=${PREPARE_ON_START-tr:en,en:tr,en:de,de:en}
+      # CPU threads per translation, and how many translations run at once.
       - TRANSLATE_THREADS=${TRANSLATE_THREADS:-4}
-      # Pair preloaded at startup so the first real translation isn't the one
-      # that pays for conversion. Set to "" to skip.
-      - WARM_PAIR=${WARM_PAIR:-tr:en}
+      - TRANSLATE_CONCURRENCY=${TRANSLATE_CONCURRENCY:-2}
+      - MIN_FREE_DISK_MB=${MIN_FREE_DISK_MB:-1500}
+    # Ceiling for the whole container: a runaway model conversion can restart the
+    # engine, but can never take the other Quarc apps on this machine down with it.
+    mem_limit: ${ENGINE_MEM_LIMIT:-4500m}
     volumes:
       - translate_models:/models
     healthcheck:
@@ -52,7 +64,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 60s
     restart: unless-stopped
     networks:
       - app-network

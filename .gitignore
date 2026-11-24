@@ -20,3 +20,6 @@ mobile/signing/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
 backup_*/
+.pytest_cache/
+translate-engine/tests/.models/
+frontend/.vite/

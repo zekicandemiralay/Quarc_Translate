@@ -1,51 +1,106 @@
-// Talks to the self-hosted translation engine (see docker-compose.yml, service
-// `translate-engine`) — free, keyless, and never leaves your own server, same
-// philosophy as Weather using Open-Meteo instead of a paid API. It keeps
-// LibreTranslate's HTTP shape, which is why swapping the models behind it
-// needed no changes here.
-const cache = require('./cache');
+// Client for the self-hosted translation engine (docker-compose service
+// `translate-engine`): free, keyless, and the text never leaves your server.
+//
+// This is the only place that knows the engine's HTTP shape and the only place
+// that turns its failures into ApiErrors the app can act on:
+//   engine unreachable          → 502 engine_unavailable
+//   engine too slow             → 504 engine_timeout
+//   model still downloading     → 503 model_preparing  (+ stage, retryAfter)
+//   too many requests queued    → 503 busy
 
-const BASE_URL = () => process.env.LIBRETRANSLATE_URL || 'http://translate-engine:5000';
-const ENGINE_TIMEOUT = parseInt(process.env.ENGINE_TIMEOUT || '30000', 10); // 30 seconds default
+const { ApiError } = require('../errors');
 
-async function listLanguages() {
-  return cache.through('languages', 60 * 60 * 1000, async () => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), ENGINE_TIMEOUT);
+/** At most `limit` calls run at once; the rest wait (up to `maxQueue`). */
+function createGate(limit, maxQueue = 64) {
+  let active = 0;
+  const waiting = [];
+  // A finished task hands its slot straight to the next waiter (active stays
+  // the same), so a caller arriving in between can never jump the queue.
+  const release = () => {
+    const next = waiting.shift();
+    if (next) next();
+    else active--;
+  };
+  return async function run(task, signal) {
+    if (active < limit) {
+      active++;
+    } else {
+      if (waiting.length >= maxQueue) throw new ApiError(503, 'busy', 'The translation engine is busy, try again in a moment');
+      await new Promise((resolve, reject) => {
+        const entry = () => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        };
+        const onAbort = () => {
+          const i = waiting.indexOf(entry);
+          if (i >= 0) waiting.splice(i, 1);
+          reject(signal.reason || new Error('aborted'));
+        };
+        waiting.push(entry);
+        signal?.addEventListener('abort', onAbort, { once: true });
+      });
+    }
     try {
-      const res = await fetch(`${BASE_URL()}/languages`, { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (!res.ok) throw new Error(`Engine /languages responded ${res.status}`);
-      return res.json();
+      return await task();
+    } finally {
+      release();
+    }
+  };
+}
+
+function createEngineClient({ baseUrl: rawBaseUrl, timeoutMs = 45000, concurrency = 3, fetchImpl = fetch } = {}) {
+  const baseUrl = String(rawBaseUrl).replace(/\/+$/, '');
+  const gate = createGate(concurrency);
+
+  async function call(path, { method = 'GET', body, signal, timeout = timeoutMs } = {}) {
+    const signals = [AbortSignal.timeout(timeout)];
+    if (signal) signals.push(signal);
+    let res;
+    try {
+      res = await fetchImpl(`${baseUrl}${path}`, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.any(signals),
+      });
     } catch (err) {
-      clearTimeout(timeoutId);
-      throw err;
+      if (signal?.aborted) throw err; // the caller gave up — not an engine problem
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        throw new ApiError(504, 'engine_timeout', 'The translation engine took too long to answer');
+      }
+      throw new ApiError(502, 'engine_unavailable', 'The translation engine is unavailable right now', { detail: err.message });
     }
-  });
-}
 
-async function translate({ q, source, target }) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), ENGINE_TIMEOUT);
-  try {
-    const res = await fetch(`${BASE_URL()}/translate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q, source, target, format: 'text' }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `Engine /translate responded ${res.status}`);
+    if (res.ok) return res.json();
+
+    const payload = await res.json().catch(() => ({}));
+    // FastAPI wraps errors as { detail: ... }; the engine's own are { detail: { code, message, ... } }.
+    const detail = typeof payload.detail === 'object' && payload.detail ? payload.detail : { message: payload.detail || payload.error };
+    const message = detail.message || `Engine responded ${res.status}`;
+    if (res.status === 503 && detail.code === 'model_preparing') {
+      throw new ApiError(503, 'model_preparing', message, {
+        model: detail.model,
+        stage: detail.stage,
+        pct: detail.pct ?? null, // download progress, when the engine knows it
+        pair: detail.pair,
+        retryAfter: detail.retryAfter ?? 3,
+      });
     }
-    // { translatedText, detectedLanguage?: { confidence, language } } — the
-    // detectedLanguage field is only present when `source` was 'auto'.
-    return res.json();
-  } catch (err) {
-    clearTimeout(timeoutId);
-    throw err;
+    if (res.status >= 400 && res.status < 500) {
+      throw new ApiError(res.status === 422 ? 400 : res.status, detail.code || 'engine_rejected', message);
+    }
+    throw new ApiError(502, detail.code || 'engine_failed', message);
   }
+
+  return {
+    health: () => call('/health', { timeout: 5000 }),
+    languages: () => call('/languages', { timeout: 10000 }),
+    models: () => call('/models', { timeout: 10000 }),
+    prepare: (pairs) => call('/models/prepare', { method: 'POST', body: { pairs }, timeout: 10000 }),
+    detect: (text, signal) => call('/detect', { method: 'POST', body: { q: text }, signal, timeout: 10000 }),
+    translate: ({ text, source, target, signal }) =>
+      gate(() => call('/translate', { method: 'POST', body: { q: text, source, target }, signal }), signal),
+  };
 }
 
-module.exports = { listLanguages, translate };
+module.exports = { createEngineClient, createGate };
