@@ -36,6 +36,30 @@ export const defaultSleep = (ms, signal) =>
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 
+/**
+ * One list of pieces for the whole text. Sentence ids become "<chunk>:<sentence>" so they are unique across chunks.
+ * Returns nulls when the server sent no segments (an older server), and the app then just shows plain text.
+ */
+function assemble(chunks, results) {
+  let any = false;
+  const segments = [];
+  const units = {};
+  chunks.forEach((chunk, i) => {
+    const res = results[i];
+    if (res.segments) {
+      any = true;
+      for (const s of res.segments) segments.push({ t: s.t, u: s.u == null ? null : `${i}:${s.u}` });
+      (res.units || []).forEach((u, k) => {
+        units[`${i}:${k}`] = u;
+      });
+    } else {
+      segments.push({ t: res.translatedText ?? '', u: null });
+    }
+    if (chunk.sep) segments.push({ t: chunk.sep, u: null });
+  });
+  return any ? { segments, units } : { segments: null, units: null };
+}
+
 export function createTranslator({ api, sleep = defaultSleep, now = Date.now, cacheSize = 500, chunkLimit } = {}) {
   const cache = new Map(); // `${source}\0${target}\0${chunk}` → response (insertion order = age)
 
@@ -93,7 +117,7 @@ export function createTranslator({ api, sleep = defaultSleep, now = Date.now, ca
   async function run({ text, source, target, signal, onProgress, onPreparing }) {
     const chunks = splitForRequests(text, chunkLimit);
     const total = chunks.length;
-    if (!total || !text.trim()) return { text: '', detected: null, confidence: null, hint: null, sameLanguage: false, cached: true, route: null, chunks: 0 };
+    if (!total || !text.trim()) return { text: '', segments: null, units: null, detected: null, confidence: null, hint: null, sameLanguage: false, cached: true, route: null, chunks: 0 };
 
     // One detection for the whole text, so every chunk is translated from the same language
     // (a short chunk like "Hotel" would otherwise be guessed on its own).
@@ -114,7 +138,7 @@ export function createTranslator({ api, sleep = defaultSleep, now = Date.now, ca
     }
 
     if (effectiveSource !== 'auto' && effectiveSource === target) {
-      return { text, detected, confidence, hint: null, sameLanguage: source === 'auto', cached: true, route: null, chunks: total };
+      return { text, segments: null, units: null, detected, confidence, hint: null, sameLanguage: source === 'auto', cached: true, route: null, chunks: total };
     }
 
     const results = new Array(total).fill(null);
@@ -170,8 +194,12 @@ export function createTranslator({ api, sleep = defaultSleep, now = Date.now, ca
       confidence = r.confidence ?? null;
     }
     const sameLanguage = source === 'auto' && !!detected && detected === target && (confidence ?? 0) >= 0.5;
+    const pieces = sameLanguage ? { segments: null, units: null } : assemble(chunks, results);
     return {
       text: sameLanguage ? text : joinChunks(chunks, results.map((x) => x.translatedText)),
+      // The result as tappable sentences (see lib/tappable.js); null when the server predates them.
+      segments: pieces.segments,
+      units: pieces.units,
       detected,
       confidence,
       hint: source === 'auto' ? null : r.hint || null,

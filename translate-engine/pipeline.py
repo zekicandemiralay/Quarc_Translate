@@ -7,6 +7,7 @@
 
 import logging
 import os
+import re
 import threading
 import time
 
@@ -80,13 +81,44 @@ def run_model(loaded, texts, source, target):
     return [_decode(loaded, r.hypotheses[0], target) for r in results]
 
 
+def run_model_nbest(loaded, texts, source, target, n):
+    """The `n` best renderings of each sentence (beam-search n-best) → per sentence, a list of strings."""
+    batch = [_encode(loaded, t, source) for t in texts]
+    longest = max(len(b) for b in batch)
+    beam = max(n + 2, 6)
+    if loaded.spec.kind == "nllb":
+        results = loaded.translator.translate_batch(
+            batch,
+            beam_size=beam,
+            num_hypotheses=n,
+            max_batch_size=8,
+            target_prefix=[[languages.nllb_code(target)]] * len(batch),
+            repetition_penalty=1.2,
+            max_decoding_length=min(400, int(longest * 3) + 16),
+        )
+    else:
+        results = loaded.translator.translate_batch(
+            batch, beam_size=beam, num_hypotheses=n, max_batch_size=8, max_decoding_length=min(400, int(longest * 2.5) + 16)
+        )
+    return [[_decode(loaded, h, target) for h in r.hypotheses] for r in results]
+
+
 # ── the engine ───────────────────────────────────────────────────────────────
+
+MAX_ALTERNATIVE_CHARS = 600
+_KEY_JUNK = re.compile(r"[\W_]+", re.UNICODE)
+
+
+def _same_as(a, b):
+    """Two renderings that differ only in case, spacing or punctuation are not alternatives."""
+    return _KEY_JUNK.sub("", a).casefold() == _KEY_JUNK.sub("", b).casefold()
 
 
 class Engine:
-    def __init__(self, store, run=run_model, detector=detection.detect, concurrency=None):
+    def __init__(self, store, run=run_model, detector=detection.detect, concurrency=None, run_nbest=run_model_nbest):
         self.store = store
         self.run = run
+        self.run_nbest = run_nbest
         self.detector = detector
         self._slots = threading.BoundedSemaphore(concurrency or config.CONCURRENCY)
 
@@ -137,12 +169,69 @@ class Engine:
             if entry.state != "ready":
                 raise ModelNotReady(step.model, entry.state, entry.pct)
 
-        translated = self._translate_text(text, source, target, steps)
+        translated, segments, units = self._translate_text(text, source, target, steps)
         return {
             "translatedText": translated,
+            # The same text cut into pieces: `u` is an index into `units` for a translated sentence (the app
+            # lets you tap it to see alternatives) and None for layout (line breaks, bullets, spaces).
+            # "".join(piece["t"]) == translatedText.
+            "segments": segments,
+            "units": units,
             "detectedLanguage": detected_out,
             "route": {"models": [s.model.key for s in steps], "pivot": len(steps) > 1, "ms": int((time.time() - started) * 1000)},
         }
+
+    def alternatives(self, text, source, target, n=4):
+        """Other good translations of ONE sentence (the user tapped it): the model's n-best, cleaned like a
+        normal translation (links kept, capitals restored) with near-duplicates removed. Best first."""
+        text = (text or "").strip()
+        if not text:
+            return {"alternatives": []}
+        if len(text) > MAX_ALTERNATIVE_CHARS:
+            raise TranslateError("text_too_long", f"Alternatives are for one sentence (max {MAX_ALTERNATIVE_CHARS} characters)")
+        target = languages.normalize(target)
+        if not target:
+            raise TranslateError("unsupported_language", "Unsupported target language")
+        if source in (None, "", "auto"):
+            source = self.detect(text)["language"]
+        else:
+            source = languages.normalize(source)
+            if not source:
+                raise TranslateError("unsupported_language", "Unsupported source language")
+        if source == target:
+            return {"alternatives": []}
+
+        n = max(2, min(int(n or 4), 6))
+        steps = routes.plan(source, target)
+        entries = [self.store.ensure(step.model, priority=0) for step in steps]
+        for step, entry in zip(steps, entries):
+            if entry.state != "ready":
+                raise ModelNotReady(step.model, entry.state, entry.pct)
+
+        shouting = textproc.is_shouting(text)
+        work = textproc.lower_for(text, source) if shouting else text
+        work, spans = textproc.protect(work)
+        if not textproc.has_letters_besides_tokens(work):
+            return {"alternatives": []}
+
+        with self._slots:
+            texts = [work]
+            for step in steps[:-1]:  # a route through English: the first leg is taken as it is, only the last varies
+                with self.store.use(step.model) as loaded:
+                    texts = self.run(loaded, texts, step.source, step.target)
+            last = steps[-1]
+            with self.store.use(last.model) as loaded:
+                hypotheses = self.run_nbest(loaded, texts, last.source, last.target, n)[0]
+
+        out = []
+        for hypothesis in hypotheses:
+            restored = textproc.restore(hypothesis, spans)
+            if restored is None:
+                continue  # this variant lost a protected link/email: not offered
+            candidate = self._finish(restored, target, shouting)
+            if candidate.strip() and not any(_same_as(candidate, seen) for seen in out):
+                out.append(candidate)
+        return {"alternatives": out[:n]}
 
     # -- internals ------------------------------------------------------------
 
@@ -196,12 +285,25 @@ class Engine:
             for i, text_out in zip(redo, again):
                 finals[i] = self._finish(text_out, target, prepared[i][2])
 
-        # 4. Lay the lines out again, exactly like the original.
-        out_lines = []
-        for line in lines:
-            body = textproc.join_sentences([finals[u] for u in line.units], target) if line.units else line.body
-            out_lines.append(f"{line.indent}{line.marker}{body}{line.trail}")
-        return "\n".join(out_lines)
+        # 4. Lay the lines out again, exactly like the original — as text, and as tappable pieces.
+        segments, units = [], []
+        sep = textproc.sentence_separator(target)
+        for number, line in enumerate(lines):
+            if number:
+                segments.append({"t": "\n", "u": None})
+            if line.indent + line.marker:
+                segments.append({"t": line.indent + line.marker, "u": None})
+            if line.units:
+                for k, u in enumerate(line.units):
+                    if k and sep:
+                        segments.append({"t": sep, "u": None})
+                    units.append({"src": unique[u], "out": finals[u], "alt": prepared[u][0] is not None})
+                    segments.append({"t": finals[u], "u": len(units) - 1})
+            elif line.body:
+                segments.append({"t": line.body, "u": None})
+            if line.trail:
+                segments.append({"t": line.trail, "u": None})
+        return "".join(s["t"] for s in segments), segments, units
 
     @staticmethod
     def _finish(text, target, shouting):

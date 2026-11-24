@@ -165,8 +165,13 @@ def sentences_of(body):
 _NO_SPACE_TARGETS = {"zh", "ja", "th"}
 
 
+def sentence_separator(target):
+    """What goes between two translated sentences of one line (nothing in Chinese/Japanese/Thai)."""
+    return "" if target in _NO_SPACE_TARGETS else " "
+
+
 def join_sentences(parts, target):
-    return ("" if target in _NO_SPACE_TARGETS else " ").join(parts)
+    return sentence_separator(target).join(parts)
 
 
 # ── protected spans ──────────────────────────────────────────────────────────

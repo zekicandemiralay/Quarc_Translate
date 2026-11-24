@@ -13,6 +13,7 @@ const SPEC = {
   language: { default: 'en', check: (v) => ['en', 'tr'].includes(v), hint: 'en or tr' },
   font_size: { default: 'm', check: (v) => ['s', 'm', 'l', 'xl'].includes(v), hint: 's, m, l or xl' },
   live: { default: 1, check: (v) => typeof v === 'boolean' || v === 0 || v === 1, store: (v) => (v ? 1 : 0), out: (v) => v !== 0, hint: 'true or false' },
+  suggestions: { default: 1, check: (v) => typeof v === 'boolean' || v === 0 || v === 1, store: (v) => (v ? 1 : 0), out: (v) => v !== 0, hint: 'true or false' },
   save_history: { default: 1, check: (v) => typeof v === 'boolean' || v === 0 || v === 1, store: (v) => (v ? 1 : 0), out: (v) => v !== 0, hint: 'true or false' },
   recent_langs: {
     default: '[]',

@@ -121,6 +121,17 @@ def detect(text):
     if not candidates:
         return {"language": "en", "confidence": 0.0, "candidates": []}
 
+    # Turkish typed without Turkish letters: statistics call `bugun hava cok guzel` Dutch, so ask the
+    # Turkish word list instead (restore the letters; are the words real Turkish?).
+    if dominant == "latin" and "tr" in candidates:
+        try:
+            import turkish
+
+            if turkish.ascii_turkish_evidence(cleaned) >= 0.75:
+                return {"language": "tr", "confidence": 0.8, "candidates": [{"language": "tr", "confidence": 0.8}]}
+        except Exception:  # noqa: BLE001 - detection must never take the engine down
+            pass
+
     for script, pattern, only in _MARKERS:
         if script == dominant and pattern.search(cleaned):
             narrowed = [c for c in only if c in candidates]

@@ -85,6 +85,11 @@ const MIGRATIONS = [
     if (!p.includes('font_size')) handle.exec("ALTER TABLE prefs ADD COLUMN font_size TEXT NOT NULL DEFAULT 'm'");
     if (!p.includes('recent_langs')) handle.exec("ALTER TABLE prefs ADD COLUMN recent_langs TEXT NOT NULL DEFAULT '[]'");
   },
+
+  // 3 — "Did you mean…" suggestions can be switched off.
+  (handle) => {
+    if (!columnsOf(handle, 'prefs').includes('suggestions')) handle.exec('ALTER TABLE prefs ADD COLUMN suggestions INTEGER NOT NULL DEFAULT 1');
+  },
 ];
 
 function migrate(handle) {

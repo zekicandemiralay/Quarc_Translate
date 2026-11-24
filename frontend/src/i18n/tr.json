@@ -51,7 +51,21 @@
     "tooLong": "Çok uzun — sınır {{limit}} karakter.",
     "progress": "{{total}} parçadan {{done}}",
     "useAsInput": "Bunu geri çevir",
-    "liveOff": "Canlı çeviri kapalı — Çevir’e veya Ctrl+Enter’a bas."
+    "liveOff": "Canlı çeviri kapalı — Çevir’e veya Ctrl+Enter’a bas.",
+    "didYouMean": "Bunu mu demek istedin:",
+    "useSuggestion": "Kullan",
+    "dismissSuggestion": "Öneriyi kapat",
+    "moreChanges": "+{{count}} tane daha",
+    "tapHint": "Başka çeviriler için bir cümleye dokun"
+  },
+  "alternatives": {
+    "title": "Diğer çeviriler",
+    "original": "Orijinal",
+    "current": "Mevcut",
+    "loading": "Başka çeviriler aranıyor…",
+    "none": "Bu cümle için başka çeviri bulunamadı.",
+    "failed": "Diğer çeviriler yüklenemedi.",
+    "use": "Bu çeviriyi kullan"
   },
   "errors": {
     "network": "Sunucuya ulaşılamıyor. Bağlantını (Tailscale) kontrol edip tekrar dene.",
@@ -109,6 +123,8 @@
     "liveHint": "Kapalıyken yalnızca Çevir’e bastığında çevrilir.",
     "saveHistory": "Geçmişimi sakla",
     "saveHistoryHint": "Kapalıyken çevirdiğin hiçbir şey kaydedilmez. Yıldızlananlar yine de saklanır.",
+    "suggestions": "Düzeltme öner",
+    "suggestionsHint": "Yazım hataları ve ç ğ ı ö ş ü olmadan yazılmış Türkçe için “Bunu mu demek istedin…” önerir. Dokunmadıkça hiçbir şey değişmez.",
     "textSize": "Yazı boyutu",
     "sizeS": "K",
     "sizeM": "O",

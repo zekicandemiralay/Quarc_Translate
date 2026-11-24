@@ -12,7 +12,7 @@ const SECRET = 'test-secret-that-is-long-enough-for-hs256';
 const LANGUAGES = ['en', 'tr', 'de', 'fr', 'es', 'ar'].map((code) => ({ code, name: code, nameEn: code, rtl: code === 'ar' }));
 
 function fakeEngine() {
-  const calls = { translate: [], prepare: [], detect: [] };
+  const calls = { translate: [], prepare: [], detect: [], suggest: [], alternatives: [] };
   const engine = {
     calls,
     // steer: set to a function (args) => result | throws
@@ -35,13 +35,30 @@ function fakeEngine() {
       calls.detect.push(text);
       return { language: 'en', confidence: 0.99, candidates: [] };
     },
+    // steer: set to a function ({ text, source }) => result | throws
+    onSuggest: null,
+    async suggest({ text, source }) {
+      calls.suggest.push({ text, source });
+      if (engine.onSuggest) return engine.onSuggest({ text, source });
+      return { language: source === 'auto' ? 'tr' : source, suggestion: null };
+    },
+    // steer: set to a function ({ text, source, target }) => result | throws
+    onAlternatives: null,
+    async alternatives({ text, source, target }) {
+      calls.alternatives.push({ text, source, target });
+      if (engine.onAlternatives) return engine.onAlternatives({ text, source, target });
+      return { alternatives: [`[${target}] ${text}`, `(${target}) ${text}`] };
+    },
     async translate({ text, source, target }) {
       calls.translate.push({ text, source, target });
       if (engine.delayMs) await new Promise((r) => setTimeout(r, engine.delayMs));
       if (engine.onTranslate) return engine.onTranslate({ text, source, target });
       const detected = /[ğışİ]/.test(text) ? 'tr' : 'en';
+      const translated = `[${target}] ${text}`;
       return {
-        translatedText: `[${target}] ${text}`,
+        translatedText: translated,
+        segments: [{ t: translated, u: 0 }],
+        units: [{ src: text, out: translated, alt: true }],
         detectedLanguage: { language: detected, confidence: 0.97 },
         route: { model: 'fake' },
       };

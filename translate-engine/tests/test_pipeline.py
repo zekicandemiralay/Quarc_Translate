@@ -175,3 +175,108 @@ def test_prepare_queues_pairs_and_ignores_nonsense():
     started = engine.prepare([("de", "tr"), ("en", "en"), ("xx", "tr"), ("auto", "tr")])
     assert [s["model"] for s in started] == ["opus-mt-de-en", "opus-mt-tc-big-en-tr"]
     assert store.ensured == ["opus-mt-de-en", "opus-mt-tc-big-en-tr"]
+
+
+# ── tappable sentences and alternatives ──────────────────────────────────────
+
+
+def test_segments_rebuild_the_translation_exactly_and_mark_each_sentence():
+    engine, _run, _ = make()
+    text = "Dear Sir,\n\nThank you. Please reply.\n  - one\n  - two  \nBye"
+    out = engine.translate(text, "en", "tr")
+    assert "".join(s["t"] for s in out["segments"]) == out["translatedText"]
+    sentences = [out["units"][s["u"]] for s in out["segments"] if s["u"] is not None]
+    assert [u["src"] for u in sentences] == ["Dear Sir,", "Thank you.", "Please reply.", "one", "two", "Bye"]
+    assert [u["out"] for u in sentences][1] == "[tr] Thank you."
+    # layout is NOT part of any sentence
+    assert all(s["u"] is None for s in out["segments"] if s["t"].strip() in ("", "-") or s["t"] == "  - ")
+
+
+def test_a_sentence_that_was_not_translated_is_marked_so():
+    engine, _run, _ = make()
+    out = engine.translate("https://example.com/x\nHello there", "en", "tr")
+    flags = {u["src"]: u["alt"] for u in out["units"]}
+    assert flags == {"https://example.com/x": False, "Hello there": True}
+
+
+def test_repeated_sentences_get_their_own_unit_each_time():
+    engine, _run, _ = make()
+    out = engine.translate("Yes. Yes.", "en", "tr")
+    assert [u["src"] for u in out["units"]] == ["Yes.", "Yes."]
+    assert sum(1 for s in out["segments"] if s["u"] is not None) == 2
+
+
+def test_chinese_output_has_no_spaces_between_sentence_segments():
+    engine, _run, _ = make(Recorder(lambda t, s, tgt, n: {"Hello.": "你好。", "Bye.": "再见。"}[t]))
+    out = engine.translate("Hello. Bye.", "en", "zh")
+    assert [s["t"] for s in out["segments"]] == ["你好。", "再见。"]
+
+
+class NBest:
+    """A fake n-best runner: the model's candidates for each sentence, best first."""
+
+    def __init__(self, table):
+        self.table, self.calls = table, []
+
+    def __call__(self, loaded, texts, source, target, n):
+        self.calls.append((loaded.spec.key, source, target, list(texts), n))
+        return [self.table.get(t, [f"[{target}] {t}"]) for t in texts]
+
+
+def make_alt(table):
+    nbest = NBest(table)
+    store = FakeStore()
+    engine = pipeline.Engine(store, run=Recorder(), detector=lambda t: {"language": "en", "confidence": 0.99, "candidates": []}, run_nbest=nbest)
+    return engine, nbest, store
+
+
+def test_alternatives_are_the_models_other_candidates_best_first():
+    engine, nbest, _ = make_alt({"Good morning, how are you?": ["Günaydın, nasılsın?", "Günaydın, nasılsınız?", "Sabah şerifleriniz hayrolsun, nasılsın?"]})
+    out = engine.alternatives("Good morning, how are you?", "en", "tr", n=3)
+    assert out["alternatives"] == ["Günaydın, nasılsın?", "Günaydın, nasılsınız?", "Sabah şerifleriniz hayrolsun, nasılsın?"]
+    assert nbest.calls[0][4] == 3
+
+
+def test_near_duplicates_are_not_alternatives():
+    engine, _n, _ = make_alt({"Hi there": ["Merhaba.", "merhaba", "Merhaba!", "Selam"]})
+    assert engine.alternatives("Hi there", "en", "tr")["alternatives"] == ["Merhaba.", "Selam"]
+
+
+def test_alternatives_keep_links_and_drop_variants_that_lost_them():
+    # the model sees a placeholder; a variant that drops it must not be offered
+    engine, _n, _ = make_alt({"Write to QZ0 now": ["QZ0 adresine yazın", "şimdi yazın", "Şimdi QZ0 adresine yazın"]})
+    out = engine.alternatives("Write to me@x.org now", "en", "tr")["alternatives"]
+    assert out == ["me@x.org adresine yazın", "Şimdi me@x.org adresine yazın"]
+
+
+def test_alternatives_of_shouting_stay_shouting():
+    engine, _n, _ = make_alt({"Do not open the door": ["Kapıyı açma", "Kapıyı açmayın"]})
+    assert engine.alternatives("DO NOT OPEN THE DOOR", "en", "tr")["alternatives"] == ["KAPIYI AÇMA", "KAPIYI AÇMAYIN"]
+
+
+def test_alternatives_through_english_vary_only_the_last_leg():
+    engine, nbest, store = make_alt({"[en] Guten Tag": ["Iyi gunler", "Merhaba"]})
+    engine.run = Recorder()  # the first leg runs normally: de -> en
+    out = engine.alternatives("Guten Tag", "de", "tr")["alternatives"]
+    assert out == ["Iyi gunler", "Merhaba"]
+    assert nbest.calls[0][1:3] == ("en", "tr"), "only the English -> Turkish leg is n-best"
+
+
+def test_alternatives_edge_cases():
+    engine, nbest, _ = make_alt({})
+    assert engine.alternatives("   ", "en", "tr") == {"alternatives": []}
+    assert engine.alternatives("Hello", "tr", "tr") == {"alternatives": []}
+    assert engine.alternatives("https://example.com/x", "en", "tr") == {"alternatives": []}
+    assert nbest.calls == []
+    with pytest.raises(pipeline.TranslateError) as e:
+        engine.alternatives("x" * 700, "en", "tr")
+    assert e.value.code == "text_too_long"
+    with pytest.raises(pipeline.TranslateError) as e:
+        engine.alternatives("Hello", "en", "xx")
+    assert e.value.code == "unsupported_language"
+
+
+def test_alternatives_wait_for_a_model_that_is_still_downloading():
+    engine = pipeline.Engine(FakeStore(ready=False), run=Recorder(), detector=lambda t: {"language": "en", "confidence": 0.9, "candidates": []}, run_nbest=NBest({}))
+    with pytest.raises(ModelNotReady):
+        engine.alternatives("Hello there", "en", "tr")

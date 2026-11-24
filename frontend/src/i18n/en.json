@@ -51,7 +51,21 @@
     "tooLong": "Too long — the limit is {{limit}} characters.",
     "progress": "{{done}} of {{total}} parts",
     "useAsInput": "Translate this back",
-    "liveOff": "Live translation is off — press Translate or Ctrl+Enter."
+    "liveOff": "Live translation is off — press Translate or Ctrl+Enter.",
+    "didYouMean": "Did you mean:",
+    "useSuggestion": "Use",
+    "dismissSuggestion": "Dismiss suggestion",
+    "moreChanges": "+{{count}} more",
+    "tapHint": "Tap a sentence to see other translations"
+  },
+  "alternatives": {
+    "title": "Other translations",
+    "original": "Original",
+    "current": "Current",
+    "loading": "Looking for other translations…",
+    "none": "No other translations found for this sentence.",
+    "failed": "Couldn't load other translations.",
+    "use": "Use this translation"
   },
   "errors": {
     "network": "Can't reach the server. Check your connection (Tailscale) and try again.",
@@ -109,6 +123,8 @@
     "liveHint": "Off: translate only when you press Translate.",
     "saveHistory": "Keep my history",
     "saveHistoryHint": "Off: nothing you translate is saved. Starred translations are still kept.",
+    "suggestions": "Suggest corrections",
+    "suggestionsHint": "Offers “Did you mean…” for typos and for Turkish typed without ç ğ ı ö ş ü. Nothing is changed unless you tap it.",
     "textSize": "Text size",
     "sizeS": "S",
     "sizeM": "M",

@@ -25,8 +25,10 @@ RUN find /usr/local/lib/python3.11/site-packages -path '*ctranslate2*' -name '*.
 # text processing, detection, model store, provisioning, pipeline, service).
 COPY *.py ./
 
-# Fail the build, not the container, if the engine itself cannot start.
-RUN python -c "import service, routes, detect; print('engine imports OK;', len(routes.DEDICATED), 'dedicated pairs')"
+# Fail the build, not the container, if the engine itself cannot start — or if the data the
+# "did you mean" suggestions need (Turkish lexicon, word lists) is missing from the image.
+RUN python -c "import service, routes, detect; print('engine imports OK;', len(routes.DEDICATED), 'dedicated pairs')" \
+    && python -c "import turkish, spelling; assert turkish.ensure_loaded(), 'Turkish data missing'; assert spelling.LEXICONS.get('en'), 'English word list missing'; print('suggestion data OK')"
 
 # Models are downloaded (and converted) on first use into this volume, not baked
 # into the image — keeps the image small and lets you change which languages

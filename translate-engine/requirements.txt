@@ -16,3 +16,9 @@ py3langid==0.3.0
 # Only imported while a dedicated model is converted for the first time (provision.py),
 # never to translate. CPU wheel — the GPU build is ~2 GB more for nothing here.
 torch==2.5.1
+# "Did you mean…" suggestions (suggest.py, spelling.py, turkish.py).
+# Zemberek: only its deasciifier and root lexicon are used (not the 180 MB analyzer or the 330 MB spell checker).
+zemberek-python==0.2.3
+antlr4-python3-runtime==4.8
+# Word-frequency lists for typo checking. Data: CC BY-SA 4.0 (Robyn Speer).
+wordfreq==3.1.1

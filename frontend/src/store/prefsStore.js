@@ -13,6 +13,7 @@ export const DEFAULTS = {
   language: deviceLanguage(),
   font_size: 'm',
   live: true,
+  suggestions: true,
   save_history: true,
   recent_langs: [],
 };

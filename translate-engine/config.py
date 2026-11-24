@@ -46,5 +46,12 @@ PREPARE_ON_START = _list("PREPARE_ON_START", _prepare_default)
 
 MAX_INPUT_CHARS = _int("MAX_INPUT_CHARS", 6000)
 
+# "Did you mean…" suggestions: Turkish letters typed without Turkish letters, typos, missing accents.
+# Turkish uses its own lexicon; the others use word-frequency lists (~15 MB each, loaded on first use).
+SUGGEST_ENABLED = os.environ.get("SUGGEST", "on").lower() not in ("off", "0", "false", "no")
+SPELL_LANGS = _list("SPELL_LANGS", "tr,en,de,fr,es,it,pt,nl,sv,pl,ca,cs,fi,ru,uk,no")
+SPELL_MAX_DICTS = _int("SPELL_MAX_DICTS", 4)  # word lists kept in RAM at once (least recently used go first)
+SPELL_TOP_WORDS = _int("SPELL_TOP_WORDS", 150000)  # words kept per language
+
 # Never start a download when less than this (MB) would be left on the volume.
 MIN_FREE_DISK_MB = _int("MIN_FREE_DISK_MB", 1500)

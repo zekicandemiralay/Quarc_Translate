@@ -19,6 +19,8 @@ import config
 import languages
 import pipeline
 import routes
+import suggest as suggestions
+import turkish
 from store import ModelFailed, ModelNotReady, ModelStore
 
 log = logging.getLogger("service")
@@ -33,6 +35,18 @@ class TranslateRequest(BaseModel):
 
 class DetectRequest(BaseModel):
     q: str
+
+
+class SuggestRequest(BaseModel):
+    q: str
+    source: str = "auto"
+
+
+class AlternativesRequest(BaseModel):
+    q: str
+    source: str = "auto"
+    target: str
+    n: int = Field(default=4, ge=2, le=6)
 
 
 class PrepareRequest(BaseModel):
@@ -88,10 +102,15 @@ def create_app(engine=None, store=None, warm=True):
     store = store or build_store()
     engine = engine or pipeline.Engine(store)
 
+    # Suggestions are cheap but not free (Turkish: ~3 ms; a spelling pass: up to ~0.3 s): at most two at a
+    # time, so typing in one app can never starve translation of the CPUs.
+    suggest_slots = threading.BoundedSemaphore(2)
+
     @asynccontextmanager
     async def lifespan(_app):
         if warm:
             threading.Thread(target=_warm_up, args=(engine, store), name="warm-up", daemon=True).start()
+            threading.Thread(target=suggestions.warm, name="warm-suggest", daemon=True).start()
         yield
 
     app = FastAPI(title="Quarc Translate engine", version=config.VERSION, lifespan=lifespan)
@@ -115,6 +134,7 @@ def create_app(engine=None, store=None, warm=True):
             "ramUsedMb": snap["ramUsedMb"],
             "ramBudgetMb": snap["ramBudgetMb"],
             "busy": states.count("downloading") + states.count("converting"),
+            "suggestions": {"enabled": config.SUGGEST_ENABLED, "turkish": turkish.ready()},
         }
 
     @app.get("/languages")
@@ -124,6 +144,16 @@ def create_app(engine=None, store=None, warm=True):
     @app.post("/detect")
     def detect(payload: DetectRequest):
         return engine.detect(payload.q)
+
+    @app.post("/suggest")
+    def suggest(payload: SuggestRequest):
+        """"Did you mean…": Turkish letters typed without Turkish letters, typos, missing accents."""
+        if not suggest_slots.acquire(timeout=2):
+            return {"language": None, "suggestion": None}
+        try:
+            return suggestions.suggest(payload.q, payload.source, detector=engine.detector)
+        finally:
+            suggest_slots.release()
 
     @app.get("/models")
     def models():
@@ -135,6 +165,20 @@ def create_app(engine=None, store=None, warm=True):
     @app.post("/models/prepare")
     def prepare(payload: PrepareRequest):
         return {"queued": engine.prepare([tuple(p[:2]) for p in payload.pairs if len(p) >= 2])}
+
+    @app.post("/alternatives")
+    def alternatives(payload: AlternativesRequest):
+        """Other translations of one sentence: the model's n-best, best first."""
+        try:
+            return engine.alternatives(payload.q, payload.source, payload.target, payload.n)
+        except ModelNotReady as exc:
+            response = _error(503, "model_preparing", str(exc), model=exc.spec.key, stage=exc.stage, pct=exc.pct, pair=f"{payload.source}-{payload.target}", retryAfter=3)
+            response.headers["Retry-After"] = "3"
+            return response
+        except ModelFailed as exc:
+            return _error(502, "model_failed", exc.message, model=exc.spec.key)
+        except pipeline.TranslateError as exc:
+            return _error(exc.status, exc.code, exc.message)
 
     @app.post("/translate")
     def translate(payload: TranslateRequest):

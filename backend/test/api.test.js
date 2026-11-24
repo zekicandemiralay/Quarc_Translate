@@ -182,6 +182,106 @@ describe('translate API', () => {
     });
   });
 
+  describe('did you mean', () => {
+    const suggestion = { text: 'bugün çok güzel', kind: 'diacritics', segments: [{ t: 'bugün çok güzel', changed: true }], changes: [{ from: 'bugun', to: 'bugün' }], count: 3 };
+    const ask = (body, opts) => t.api('/api/translate/suggest', { method: 'POST', body, ...opts });
+
+    test('relays the suggestion the engine made', async () => {
+      t.engine.onSuggest = () => ({ language: 'tr', suggestion });
+      const r = await ask({ text: 'bugun cok guzel', source: 'auto' });
+      t.engine.onSuggest = null;
+      assert.equal(r.status, 200);
+      assert.deepEqual(r.body, { language: 'tr', suggestion });
+    });
+
+    test('keeps the line breaks it sends to the engine, and cleans junk', async () => {
+      t.engine.calls.suggest.length = 0;
+      await ask({ text: 'a\u0000b\nc  line two\r\nthree', source: 'en' });
+      assert.equal(t.engine.calls.suggest.at(-1).text, 'ab\nc  line two\nthree');
+    });
+
+    test('asks the engine once for the same text (memory), and not at all for tiny text', async () => {
+      t.engine.calls.suggest.length = 0;
+      await ask({ text: 'the same text twice', source: 'en' });
+      await ask({ text: 'the same text twice', source: 'en' });
+      assert.equal(t.engine.calls.suggest.length, 1);
+      const tiny = await ask({ text: ' a ', source: 'en' });
+      assert.deepEqual(tiny.body, { language: null, suggestion: null });
+      assert.equal(t.engine.calls.suggest.length, 1);
+    });
+
+    test('an engine that is down, slow or still loading means "no suggestion", never an error', async () => {
+      t.engine.onSuggest = () => {
+        throw new ApiError(502, 'engine_unavailable', 'down');
+      };
+      const r = await ask({ text: 'some text that fails upstream', source: 'en' });
+      t.engine.onSuggest = null;
+      assert.equal(r.status, 200);
+      assert.deepEqual(r.body, { language: null, suggestion: null });
+    });
+
+    test('validates like translate does', async () => {
+      assert.equal((await ask({ text: 5 })).body.code, 'invalid_text');
+      assert.equal((await ask({ text: 'x'.repeat(5001), source: 'en' })).body.code, 'text_too_long');
+      assert.equal((await ask({ text: 'hello there', source: 'zz' })).body.code, 'unsupported_language');
+      assert.equal((await ask({ text: 'hello there' }, { as: null })).status, 401);
+    });
+  });
+
+  describe('tappable sentences and alternatives', () => {
+    const alt = (body, opts) => t.api('/api/translate/alternatives', { method: 'POST', body, ...opts });
+
+    test('a translation comes with its sentences, so the app can offer alternatives', async () => {
+      const r = await post({ text: 'Hello there.', source: 'en', target: 'tr', save: false });
+      assert.deepEqual(r.body.segments, [{ t: '[tr] Hello there.', u: 0 }]);
+      assert.deepEqual(r.body.units, [{ src: 'Hello there.', out: '[tr] Hello there.', alt: true }]);
+    });
+
+    test('text already in the target language has no sentences to vary', async () => {
+      const r = await post({ text: 'Merhaba dünya', source: 'tr', target: 'tr', save: false });
+      assert.equal(r.body.segments, undefined);
+      const auto = await post({ text: 'Günaydın efendim, nasılsınız?', source: 'auto', target: 'tr', save: false });
+      assert.equal(auto.body.segments, null);
+    });
+
+    test('relays the other translations of a sentence', async () => {
+      t.engine.onAlternatives = () => ({ alternatives: ['Günaydın', 'Sabah şerifler hayrolsun'] });
+      const r = await alt({ text: 'Good morning', source: 'en', target: 'tr' });
+      t.engine.onAlternatives = null;
+      assert.equal(r.status, 200);
+      assert.deepEqual(r.body, { alternatives: ['Günaydın', 'Sabah şerifler hayrolsun'] });
+    });
+
+    test('asks the engine once for the same sentence', async () => {
+      t.engine.calls.alternatives.length = 0;
+      await alt({ text: 'Remember this sentence', source: 'en', target: 'de' });
+      await alt({ text: 'Remember this sentence', source: 'en', target: 'de' });
+      await alt({ text: 'Remember this sentence', source: 'en', target: 'fr' });
+      assert.equal(t.engine.calls.alternatives.length, 2);
+    });
+
+    test('same language needs no engine, and bad input is refused with a code', async () => {
+      t.engine.calls.alternatives.length = 0;
+      assert.deepEqual((await alt({ text: 'Hello', source: 'tr', target: 'tr' })).body, { alternatives: [] });
+      assert.equal(t.engine.calls.alternatives.length, 0);
+      assert.equal((await alt({ text: '  ', source: 'en', target: 'tr' })).body.code, 'empty_text');
+      assert.equal((await alt({ text: 'x'.repeat(601), source: 'en', target: 'tr' })).body.code, 'text_too_long');
+      assert.equal((await alt({ text: 'Hi', source: 'en' })).body.code, 'invalid_target');
+      assert.equal((await alt({ text: 'Hi', source: 'en', target: 'zz' })).body.code, 'unsupported_language');
+      assert.equal((await alt({ text: 'Hello there' }, { as: null })).status, 401);
+    });
+
+    test('a language pack that is still downloading is waited out like in translate', async () => {
+      t.engine.onAlternatives = () => {
+        throw new ApiError(503, 'model_preparing', 'Preparing', { stage: 'downloading', pct: 40, retryAfter: 3 });
+      };
+      const r = await alt({ text: 'Not ready yet at all', source: 'en', target: 'es' });
+      t.engine.onAlternatives = null;
+      assert.equal(r.status, 503);
+      assert.equal(r.body.code, 'model_preparing');
+    });
+  });
+
   describe('engine passthrough', () => {
     test('languages, status, models', async () => {
       const langs = await t.api('/api/translate/languages');
@@ -214,8 +314,8 @@ describe('preferences', () => {
     const r = await t.api('/api/prefs');
     assert.equal(r.status, 200);
     assert.deepEqual(
-      { s: r.body.source_lang, t: r.body.target_lang, live: r.body.live, save: r.body.save_history, size: r.body.font_size, recent: r.body.recent_langs },
-      { s: 'auto', t: 'en', live: true, save: true, size: 'm', recent: [] }
+      { s: r.body.source_lang, t: r.body.target_lang, live: r.body.live, save: r.body.save_history, size: r.body.font_size, recent: r.body.recent_langs, hints: r.body.suggestions },
+      { s: 'auto', t: 'en', live: true, save: true, size: 'm', recent: [], hints: true }
     );
   });
 

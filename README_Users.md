@@ -71,6 +71,12 @@ It also helps you when something is off:
 
 - **You chose the wrong source language** — "Looks like Turkish. *Translate from Turkish*" appears. One tap.
 - **The text is already in your target language** — it switches the target to the language you use next, and tells you.
+- **A typo, or Turkish typed without ç ğ ı ö ş ü** — a yellow *"Did you mean: bugün çok güzel?"* appears under your
+  text with the changed words marked. Tap **Use** and the corrected text is translated; ignore it (or tap ✕) and
+  nothing changes. It never touches names, links or capitalised words. You can switch it off in Settings.
+- **The translation isn't quite what you meant** — **tap any sentence** of the translation. A sheet shows the
+  original and the other ways the model could translate that sentence; tap one to swap just that sentence.
+  (Copy any of them with the small copy button.)
 - **Layout is kept**: paragraphs, blank lines, bullet lists. Email addresses and links are copied exactly, never translated.
 - **Long text** is translated in parts — it appears as it goes, and you can keep editing.
 
@@ -117,7 +123,7 @@ Android Chrome appears in the Share sheet too.
 ## Settings
 
 - **Languages** — the pair the app starts with
-- **Translation** — live translation, keep history, text size
+- **Translation** — live translation, suggest corrections, keep history, text size
 - **Appearance** — light / dark / automatic, and the app's own language (English or Türkçe)
 - Everything is saved on your **account**, so it's the same on every device
 

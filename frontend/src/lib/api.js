@@ -53,6 +53,13 @@ export const translateRequest = ({ text, source, target, signal }) =>
 
 export const detectRequest = (text, signal) => request('/api/translate/detect', { method: 'POST', body: { text }, signal });
 
+/** "Did you mean…": Turkish typed without ç ğ ı ö ş ü, typos, missing accents. → { language, suggestion | null } */
+export const suggestRequest = ({ text, source, signal }) => request('/api/translate/suggest', { method: 'POST', body: { text, source }, signal });
+
+/** Other translations of ONE sentence (the model's n-best). → { alternatives: string[] } */
+export const alternativesRequest = ({ text, source, target, signal }) =>
+  request('/api/translate/alternatives', { method: 'POST', body: { text, source, target }, signal });
+
 export const fetchEngineModels = () => request('/api/translate/models');
 
 /** Asks the server to start fetching the language pack for a pair in the background. */

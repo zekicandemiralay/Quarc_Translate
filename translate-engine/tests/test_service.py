@@ -117,3 +117,46 @@ def test_prepare_endpoint_queues_models(client):
     c, *_ = client
     r = c.post("/models/prepare", json={"pairs": [["en", "de"], ["de", "tr"]]}).json()
     assert [q["model"] for q in r["queued"]] == ["opus-mt-en-de", "opus-mt-de-en", "opus-mt-tc-big-en-tr"]
+
+
+def test_suggest_endpoint_offers_turkish_letters(client):
+    c, *_ = client
+    r = c.post("/suggest", json={"q": "bugun hava cok guzel", "source": "auto"}).json()
+    assert r["language"] == "tr"
+    assert r["suggestion"]["text"] == "bugün hava çok güzel"
+    assert r["suggestion"]["kind"] == "diacritics"
+    assert "".join(p["t"] for p in r["suggestion"]["segments"]) == r["suggestion"]["text"]
+
+
+def test_suggest_endpoint_says_nothing_when_all_is_well(client):
+    c, *_ = client
+    assert c.post("/suggest", json={"q": "Bugün hava çok güzel.", "source": "tr"}).json()["suggestion"] is None
+    assert c.post("/suggest", json={"q": "The weather is lovely today.", "source": "en"}).json()["suggestion"] is None
+
+
+def test_suggest_endpoint_needs_a_text(client):
+    c, *_ = client
+    assert c.post("/suggest", json={"source": "en"}).status_code == 422
+
+
+def test_health_reports_whether_suggestions_are_ready(client):
+    c, *_ = client
+    h = c.get("/health").json()
+    assert h["suggestions"]["enabled"] is True and isinstance(h["suggestions"]["turkish"], bool)
+
+
+def test_alternatives_endpoint(client):
+    c, engine, _ = client
+    engine.run_nbest = lambda loaded, texts, s, t, n: [["[tr] Hello there", "Selam", "Merhaba"] for _ in texts]
+    r = c.post("/alternatives", json={"q": "Hello there", "source": "en", "target": "tr", "n": 3}).json()
+    assert r["alternatives"] == ["[tr] Hello there", "Selam", "Merhaba"]
+
+
+def test_alternatives_endpoint_errors(client):
+    c, engine, store = client
+    assert c.post("/alternatives", json={"q": "x" * 700, "source": "en", "target": "tr"}).json()["detail"]["code"] == "text_too_long"
+    assert c.post("/alternatives", json={"q": "Hi", "source": "en", "target": "tr", "n": 99}).status_code == 422
+    store.state = "downloading"
+    r = c.post("/alternatives", json={"q": "Hello there", "source": "en", "target": "tr"})
+    assert r.status_code == 503 and r.json()["detail"]["code"] == "model_preparing"
+    store.state = "ready"

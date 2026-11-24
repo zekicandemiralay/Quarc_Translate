@@ -98,6 +98,11 @@ function createEngineClient({ baseUrl: rawBaseUrl, timeoutMs = 45000, concurrenc
     models: () => call('/models', { timeout: 10000 }),
     prepare: (pairs) => call('/models/prepare', { method: 'POST', body: { pairs }, timeout: 10000 }),
     detect: (text, signal) => call('/detect', { method: 'POST', body: { q: text }, signal, timeout: 10000 }),
+    // "Did you mean…". The first call after a restart waits for the Turkish data to load once, hence the longer timeout.
+    suggest: ({ text, source, signal }) => call('/suggest', { method: 'POST', body: { q: text, source }, signal, timeout: 20000 }),
+    // Other translations of one sentence (the model's n-best). Goes through the same gate as translation: it is the same CPU work.
+    alternatives: ({ text, source, target, signal }) =>
+      gate(() => call('/alternatives', { method: 'POST', body: { q: text, source, target }, signal }), signal),
     translate: ({ text, source, target, signal }) =>
       gate(() => call('/translate', { method: 'POST', body: { q: text, source, target }, signal }), signal),
   };

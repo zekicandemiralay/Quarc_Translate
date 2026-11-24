@@ -185,6 +185,9 @@ export default function Settings() {
           <Row label={t('settings.live')} hint={t('settings.liveHint')}>
             <Switch checked={prefs.live} onChange={(v) => update({ live: v })} label={t('settings.live')} testId="live-switch" />
           </Row>
+          <Row label={t('settings.suggestions')} hint={t('settings.suggestionsHint')}>
+            <Switch checked={prefs.suggestions !== false} onChange={(v) => update({ suggestions: v })} label={t('settings.suggestions')} testId="suggestions-switch" />
+          </Row>
           <Row label={t('settings.saveHistory')} hint={t('settings.saveHistoryHint')}>
             <Switch checked={prefs.save_history} onChange={(v) => update({ save_history: v })} label={t('settings.saveHistory')} testId="history-switch" />
           </Row>

@@ -42,6 +42,54 @@ function createTranslateRoutes({ engine, db, config, languages }) {
     res.json(await engine.prepare([[source, target]]));
   });
 
+  // "Did you mean…": Turkish typed without Turkish letters, typos, missing accents. A suggestion is a
+  // convenience, never a failure: if the engine can't answer, the answer is simply "nothing to suggest".
+  const suggestions = new LruCache(config.cacheEntries);
+  router.post('/suggest', async (req, res) => {
+    const { source = 'auto' } = req.body || {};
+    const text = cleanText(req.body?.text);
+    const none = { language: null, suggestion: null };
+    if (typeof req.body?.text !== 'string') throw badRequest('invalid_text', 'text is required and must be a string');
+    if (text.trim().length < 3) return res.json(none);
+    if (charCount(text) > config.maxChars) throw badRequest('text_too_long', `text must be ${config.maxChars} characters or fewer`, { maxLength: config.maxChars });
+    if (typeof source !== 'string') throw badRequest('invalid_source', 'source must be a language code or "auto"');
+    if (source !== 'auto' && !(await languages.codes()).has(source)) throw badRequest('unsupported_language', `Unsupported source language: ${source}`);
+
+    const key = `${source}\u0000${text}`;
+    const hit = suggestions.get(key);
+    if (hit) return res.json(hit);
+    try {
+      const result = await flight(`s:${key}`, () => engine.suggest({ text, source }));
+      suggestions.set(key, result);
+      return res.json(result);
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+      return res.json(none); // engine down, slow or still loading: no suggestion, no error
+    }
+  });
+
+  // Other translations of ONE sentence — what the app shows when you tap a sentence of the result.
+  const alternatives = new LruCache(config.cacheEntries);
+  router.post('/alternatives', async (req, res) => {
+    const { source = 'auto', target } = req.body || {};
+    const text = cleanText(req.body?.text);
+    if (typeof req.body?.text !== 'string' || !text.trim()) throw badRequest('empty_text', 'text is required');
+    if (charCount(text) > 600) throw badRequest('text_too_long', 'Alternatives are for one sentence (600 characters or fewer)', { maxLength: 600 });
+    if (typeof target !== 'string' || !target || target === 'auto') throw badRequest('invalid_target', 'target language is required');
+    if (typeof source !== 'string' || !source) throw badRequest('invalid_source', 'source must be a language code or "auto"');
+    const known = await languages.codes();
+    if (source !== 'auto' && !known.has(source)) throw badRequest('unsupported_language', `Unsupported source language: ${source}`);
+    if (!known.has(target)) throw badRequest('unsupported_language', `Unsupported target language: ${target}`);
+    if (source !== 'auto' && source === target) return res.json({ alternatives: [] });
+
+    const key = `${source}\u0000${target}\u0000${text}`;
+    const hit = alternatives.get(key);
+    if (hit) return res.json(hit);
+    const result = await flight(`a:${key}`, () => engine.alternatives({ text, source, target }));
+    alternatives.set(key, result);
+    res.json(result);
+  });
+
   router.post('/detect', async (req, res) => {
     const text = cleanText(req.body?.text);
     if (!text.trim()) throw badRequest('empty_text', 'text is required');
@@ -98,6 +146,9 @@ function createTranslateRoutes({ engine, db, config, languages }) {
         hint,
         sameLanguage,
         route: result.route || null,
+        // The translation cut into tappable sentences (see the engine): lets the app offer alternatives.
+        segments: sameLanguage ? null : result.segments || null,
+        units: sameLanguage ? null : result.units || null,
       };
     }
 

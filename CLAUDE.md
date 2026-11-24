@@ -26,7 +26,11 @@ browser/APK ──nginx(443,:4003)──> backend (Express+SQLite, :3005) ──
 | `store.py` | `ModelStore`: per-model load locks, LRU by RAM budget, in-use models never evicted, serialized priority download queue, failure cool-down, corrupt model → deleted and re-fetched. |
 | `provision.py` | Download/convert into `<key>.tmp`, marker file `quarc.json` written last, atomic rename. NLLB = prebuilt CT2 files (no PyTorch, no RAM spike); Marian = convert (PyTorch imported only here). |
 | `textproc.py` | Pure text logic: lines/bullets, sentence split (abbreviations, ordinals), `QZ0` placeholders for URLs/emails/@/`code`, ALL CAPS (Turkish i/İ), tidy. |
-| `detect.py` | script → unique letters → py3langid among what's left; confidence reduced for short text. |
+| `detect.py` | script → unique letters → py3langid among what's left; confidence reduced for short text. Asks `turkish.ascii_turkish_evidence` first for Latin text without Turkish letters (the statistical detector calls ASCII Turkish Dutch/Estonian/Indonesian). |
+| `suggest.py` | "Did you mean…": resolves the language (explicit → ASCII-Turkish evidence → confident detection → word-list vote), runs the Turkish pass or `spelling.check`, returns `{text, kind, segments, changes}`. Never applied automatically. |
+| `spelling.py` | Typos/accents from wordfreq lists: edits generated at query time (no index), slip-likelihood weights (cubed), ambiguity margin, tier B for listed-but-rare words, strict skip rules. |
+| `turkish.py` | Zemberek **deasciifier only** (add-only filter) + root lexicon/forms for "is this a Turkish word" (`is_valid` permissive, `is_plausible_form` strict, vowel harmony). |
+| `tools/eval_suggest.py` + `tools/eval_data.py` | The measurement behind every threshold: false positives on 1,666 correct words, Turkish letter restoration, language leakage, typo recall. **Run it after touching any threshold.** |
 | `languages.py` | The 56-language registry (+ NLLB FLORES codes, scripts, rtl). Adding a language = one row. |
 
 A model that is still downloading is **never** a hang or crash: the engine answers
@@ -70,12 +74,31 @@ No third-party requests (no web fonts, no CDN): the app also runs offline-first.
   also runs 8 other apps. `ENGINE_MEM_LIMIT` (4500m) caps the container.
 - Live translation no longer saves each pause: the app saves after 2.5 s idle / copy / listen / star.
 
+## Suggestions and alternatives (added after v1.0.6)
+
+- **Precision first.** A wrong "correction" is worse than a missed typo. The guard rails are measured: 0 changes on
+  1,666 correct words; ASCII-Turkish evidence fires on 0 of 146 sentences in other languages. If you change a threshold
+  and either number moves, you broke it.
+- Zemberek: use ONLY `zemberek.normalization.deasciifier`. Its morphology (+180 MB, 30 s load) and spell checker (+330 MB,
+  crashes on NumPy 2, conflicts with py3langid's NumPy≥2) were measured and rejected. The deasciifier also *removes*
+  accents when its model disagrees (`krıldı` → `krildi`), so `turkish.deasciify` keeps only changes where a plain letter
+  gains its Turkish form, and `suggest._keep_real_words` accepts a restored word only if it is a real Turkish word.
+- **Evidence must beat English.** Turkish web lists contain English words, so "the restored words look Turkish" is not
+  enough (8 of 30 English sentences passed it); the Turkish share must exceed the English-list share by 0.35.
+- `is_valid` is deliberately permissive (never flag a correct inflected word); candidates we *suggest* must pass the strict
+  `is_plausible_form` (well-attested root + inflection-only grammar + vowel harmony) or be an attested form — the 67k-entry
+  lexicon holds obscure proper nouns that make nonsense look like Turkish.
+- Alternatives: the engine's `/translate` response carries `segments` ({t, u}; "".join(t) == translatedText) and `units`
+  ({src, out, alt}); the app renders sentence spans, `POST /api/translate/alternatives` returns n-best for one sentence
+  (`run_model_nbest`, beam max(n+2, 6)). Frontend ids are `<chunk>:<unit>` (`lib/translator.js assemble`).
+- Pref `suggestions` (migration 3). `SUGGEST=off` disables it server-wide.
+
 ## Testing
 
 ```
-backend$  npm test                         # 59
-frontend$ npm test                         # 59
-engine$   python -m pytest tests           # 99 (no models)
+backend$  npm test                         # 70
+frontend$ npm test                         # 69
+engine$   python -m pytest tests           # 151 (no models; needs zemberek-python + wordfreq installed)
 engine$   QUARC_REAL_MODELS=1 QUARC_REAL_MODELS_DIR=<dir> python -m pytest tests/test_real_models.py -v   # 10, real models, ~3 min + ~2 GB
 ```
 
@@ -88,6 +111,11 @@ Turkish UI, text size, packs), long text, first-use download banner, phone layou
 
 ## Gotchas
 
+- **Shell-generated edits corrupt files.** Heredoc/`node -e`/`python -` patches containing backslashes, backticks or
+  `\u0000` turned an escape into a real NUL byte in a source file and ate backticks from a docstring. Use the editor tool
+  for source edits; if a file "has NUL bytes", repair with a script file.
+- **Python tests: sync-conflict copies are collected.** A Proton `test_x (# Name clash …#).py` is a `test_*.py` and ran a
+  suite twice (inflating the count 99 → 112). Delete conflict copies after diffing.
 - **Windows + Python multiprocessing**: some library spawns child processes that re-import your script; lab scripts need an
   `if __name__ == "__main__":` guard or conversions race each other. (Linux/Docker uses fork — not an issue there.)
 - ctranslate2 4.5.0 imports `pkg_resources` → `setuptools<81` is pinned in `requirements.txt`.

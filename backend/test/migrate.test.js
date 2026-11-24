@@ -52,6 +52,7 @@ test('an existing v1 server database is upgraded in place without losing anythin
     assert.equal(prefs.save_history, 1);
     assert.equal(prefs.font_size, 'm');
     assert.equal(prefs.recent_langs, '[]');
+    assert.equal(prefs.suggestions, 1, 'suggestions are on for existing accounts');
     assert.equal(prefs.updated_at, '2026-10-03T08:00:00Z');
     db.close();
 

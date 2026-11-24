@@ -15,6 +15,10 @@ keyless, no quota, and your text never leaves your machine.
   automatic target switch when the text is already in your target language
 - **Emails, links and `@handles` are never mangled** (a translation model will
   happily turn `support@example.com` into `Destek@example.com`; this one can't)
+- **"Did you mean…"** for typos in the major languages, and for **Turkish typed without
+  ç ğ ı ö ş ü** (`bugun hava cok guzel` → `bugün hava çok güzel`) — one tap to accept, never automatic
+- **Alternative translations**: tap any sentence of the result to see the model's other
+  candidates and swap just that sentence
 - **Listen** to either side with the device's own voices, **copy**, **share**, **star**
 - **History and saved translations** per account: search, day groups, export
   (JSON / CSV), a "don't keep my history" switch
@@ -71,6 +75,49 @@ Things the engine does that a bare model doesn't (all in `translate-engine/`):
 - repetition penalty on NLLB (it otherwise echoes "Thank you so much! Thank you!"),
   clean-up of its spaced punctuation (`How are you ?`)
 - never mutates the shared tokenizer (requests run in parallel)
+
+---
+
+## "Did you mean…" and alternative translations
+
+**Suggestions** (`translate-engine/suggest.py`, `spelling.py`, `turkish.py`) run next to the
+translation and never delay it. The chip under the text box shows the corrected text with the
+changed words marked; **nothing changes unless the person taps Use**. Switch off per account in Settings.
+
+| What | How |
+|---|---|
+| Turkish without `ç ğ ı ö ş ü` | Zemberek's deasciifier (context-aware: `ise gitmem` → `işe gitmem`, `hava güzel ise` stays) — add-only: it may add a letter, never remove one |
+| Typos and missing accents (en de fr es it pt nl sv pl ca cs fi ru uk no) | Candidates one/two keyboard slips away, looked up in word-frequency lists; weighted by how likely the slip is (missing letter, swap, doubled letter ≫ random key) |
+| Turkish typos | Same idea against Zemberek's root lexicon + the attested forms, with vowel harmony and strict inflection rules, so `evlerimizdekilerden` is not a typo |
+| Language left on "Detect" | Text with no Turkish letters that becomes real Turkish words once restored is Turkish whatever the statistical detector says (it calls `bugun hava cok guzel` Dutch). Otherwise the word lists vote when detection is unsure |
+
+**Precision first** — a wrong "correction" is worse than a missed typo, so it never touches capitalised words
+(names), acronyms, camelCase, words with digits/underscores/apostrophes, URLs/emails, or anything under 3
+letters; and it stays silent when two candidates are about equally likely (`thn` → then/than).
+
+Measured with `translate-engine/tools/eval_suggest.py` (1,666 correct words in 8 languages, 49 Turkish sentences
+with the letters stripped, ~400 injected keyboard typos):
+
+| | Result |
+|---|---|
+| **Correct words wrongly changed** | **0 of 1,666** |
+| Turkish letters restored | 386/386 words, 49/49 sentences exact; offered 49/49 with the language on "Detect" |
+| Other languages' text mistaken for ASCII-Turkish | 0 of 146 sentences (as written, and lower-cased with accents stripped) |
+| Typos fixed | en 92%, nl 88%, es 87%, it 85%, de 82%, fr 77%, pt 69%, **tr 53%** |
+| Typos "fixed" to the wrong word | 0–3 per language; Turkish 7 of 64 offered |
+
+Honest limits: Turkish typo recall is the weak spot (agglutination makes "is this a word?" hard without the 180 MB
+Zemberek analyzer, which was measured and rejected as too heavy for this box); very short garbled words are left
+alone; common misspellings that web text also contains (`recieve`) are only caught if the slip is unmistakable;
+words the lists don't know are never "corrected" if capitalised. It is a regression guard on my own test sets,
+not a benchmark. Data: [wordfreq](https://github.com/rspeer/wordfreq) (CC BY-SA 4.0) and Zemberek (Apache-2.0).
+Cost: ~35 MB for Turkish, ~15–30 MB per language word list (4 kept in RAM, `SPELL_MAX_DICTS`), ~180 MB in the image.
+
+**Alternative translations** — the engine returns every translation cut into sentences (`segments` + `units`).
+Tapping a sentence asks `POST /api/translate/alternatives`: the model's beam-search n-best for that one sentence,
+cleaned like a normal translation (links kept, capitals restored), near-duplicates removed, the shown one marked.
+Picking one swaps just that sentence and updates the history entry. On a route through English only the last
+step varies. Answers are remembered, so reopening a sentence is instant.
 
 ---
 
@@ -154,6 +201,9 @@ All optional except `JWT_SECRET`. Full comments in [.env.example](.env.example).
 | `PIVOT` | `auto` | Chain two dedicated models through English; `off` = always NLLB |
 | `PREPARE_ON_START` | `tr:en,en:tr,en:de,de:en` | Pairs fetched in the background after start (replaces `WARM_PAIR`) |
 | `TRANSLATE_THREADS` / `TRANSLATE_CONCURRENCY` | `4` / `2` | CPU threads per translation / translations at once |
+| `SUGGEST` | `on` | `off` disables "Did you mean…" for everyone |
+| `SPELL_LANGS` | `tr,en,de,fr,es,it,pt,nl,sv,pl,ca,cs,fi,ru,uk,no` | Languages that get typo suggestions |
+| `SPELL_MAX_DICTS` / `SPELL_TOP_WORDS` | `4` / `150000` | Word lists kept in RAM at once / words kept per language |
 | `ENGINE_TIMEOUT` | `45000` | ms to wait for one engine answer |
 | `ALLOWED_ORIGINS` | *(none)* | Extra web origins allowed to use the API with the login cookie |
 
@@ -180,9 +230,9 @@ Architecture notes, gotchas and conventions: **[CLAUDE.md](CLAUDE.md)**.
 ### Tests
 
 ```bash
-cd backend && npm install && npm test                 # 59: API, history rules, migration, CORS, rate limit…
-cd frontend && npm install && npm test                # 59: chunking (+ fuzz), translator retries, i18n parity…
-cd translate-engine && pip install -r requirements.txt pytest httpx && python -m pytest tests   # 99, no models needed
+cd backend && npm install && npm test                 # 70: API, history rules, migration, CORS, rate limit, suggestions, alternatives…
+cd frontend && npm install && npm test                # 69: chunking (+ fuzz), translator retries, i18n parity…
+cd translate-engine && pip install -r requirements.txt pytest httpx && python -m pytest tests   # 151, no models needed
 # with the REAL models (downloads ~2 GB through the production code path, ~3 min):
 QUARC_REAL_MODELS=1 QUARC_REAL_MODELS_DIR=/some/dir python -m pytest tests/test_real_models.py -v
 ```

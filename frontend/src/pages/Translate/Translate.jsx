@@ -5,13 +5,17 @@ import { ArrowLeftRight, ClipboardPaste, Copy, Check, CornerDownLeft, Loader2, R
 import usePrefsStore from '../../store/prefsStore';
 import useIncomingStore from '../../lib/incoming';
 import { toast } from '../../store/toastStore';
-import { ApiError, translateRequest, detectRequest, saveHistory, setFavorite, prepareModels } from '../../lib/api';
+import { ApiError, translateRequest, detectRequest, suggestRequest, saveHistory, setFavorite, prepareModels } from '../../lib/api';
 import { createTranslator } from '../../lib/translator';
 import { byCode, cachedLanguages, getLanguages, localizedName, pushRecent } from '../../lib/languages';
 import { copyText, pasteText, canShare, shareText } from '../../lib/clipboard';
 import { speak, speechSupported, stopSpeaking } from '../../lib/speech';
+import { replaceUnit, isTappable, tappableCount } from '../../lib/tappable';
+import { stillApplies } from '../../lib/suggestion';
 import LanguagePicker from '../../components/LanguagePicker';
 import EngineNotice from '../../components/EngineNotice';
+import SuggestionChip from '../../components/SuggestionChip';
+import AlternativesSheet from '../../components/AlternativesSheet';
 
 const CHAR_LIMIT = 5000;
 const DEBOUNCE_MS = 350;
@@ -20,8 +24,9 @@ const COMMIT_AFTER_MS = 2500; // a translation is "kept" once you stop changing 
 // One translator for the whole app session: its memory of finished chunks survives switching pages.
 const translator = createTranslator({ api: { translateRequest, detectRequest } });
 
-const EMPTY = { text: '', status: 'idle', detected: null, confidence: null, hint: null, error: null, preparing: null, progress: null };
+const EMPTY = { text: '', segments: null, units: null, status: 'idle', detected: null, confidence: null, hint: null, error: null, preparing: null, progress: null };
 const NO_ENTRY = { id: null, favorite: false };
+const TAP_HINT_KEY = 'quarc_translate_tap_hint_seen';
 
 function describeError(t, err, limit) {
   if (!err) return '';
@@ -50,6 +55,16 @@ export default function TranslatePage() {
   const [copied, setCopied] = useState(false);
   const [speaking, setSpeaking] = useState(null);
   const [notice, setNotice] = useState('');
+  const [suggestion, setSuggestion] = useState(null); // { …engine suggestion, forText, dismissed }
+  const [altUnit, setAltUnit] = useState(null); // { id, src, out } — the sentence whose alternatives are open
+  const [tapHintSeen, setTapHintSeen] = useState(() => {
+    try {
+      return localStorage.getItem(TAP_HINT_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const suggestController = useRef(null);
 
   // Latest values for the async code below (a timer or a response must not see stale state).
   const latest = useRef({});
@@ -134,6 +149,20 @@ export default function TranslatePage() {
       controller.current = mine;
       setView((v) => ({ ...v, status: 'working', error: null, progress: null }));
 
+      // "Did you mean…" runs alongside the translation; it never delays it and never shows an error.
+      suggestController.current?.abort();
+      if (!flipped && latest.current.prefs.suggestions !== false && text.trim().length >= 3) {
+        const asking = new AbortController();
+        suggestController.current = asking;
+        suggestRequest({ text, source, signal: asking.signal })
+          .then((res) => {
+            if (!asking.signal.aborted && res?.suggestion) setSuggestion({ ...res.suggestion, forText: text, dismissed: false });
+          })
+          .catch(() => {});
+      } else {
+        setSuggestion(null);
+      }
+
       try {
         const res = await translator.run({
           text,
@@ -158,7 +187,7 @@ export default function TranslatePage() {
           return run({ text, source, target: other, flipped: true });
         }
 
-        setView({ text: res.text, status: 'done', detected: res.detected, confidence: res.confidence, hint: res.hint, error: null, preparing: null, progress: null });
+        setView({ text: res.text, segments: res.segments, units: res.units, status: 'done', detected: res.detected, confidence: res.confidence, hint: res.hint, error: null, preparing: null, progress: null });
         setEntry(NO_ENTRY);
         scheduleCommit({ text, source, target, detected: res.detected, translated: res.text });
       } catch (err) {
@@ -175,8 +204,10 @@ export default function TranslatePage() {
     clearTimeout(timer.current);
     if (!text.trim()) {
       controller.current?.abort();
+      suggestController.current?.abort();
       setView(EMPTY);
       setEntry(NO_ENTRY);
+      setSuggestion(null);
       pending.current = null;
       return;
     }
@@ -217,14 +248,52 @@ export default function TranslatePage() {
 
   function clearAll() {
     controller.current?.abort();
+    suggestController.current?.abort();
     clearTimeout(timer.current);
     commit();
     setSourceText('');
     setView(EMPTY);
     setEntry(NO_ENTRY);
+    setSuggestion(null);
     setNotice('');
     pending.current = null;
     textarea.current?.focus();
+  }
+
+  // "Did you mean…" → Use: the corrected text replaces what was typed and is translated at once.
+  function useSuggestion() {
+    if (!suggestion) return;
+    const corrected = suggestion.text;
+    setSuggestion(null);
+    setSourceText(corrected);
+    run({ text: corrected });
+    textarea.current?.focus();
+  }
+
+  // Tapped a sentence of the result: its alternatives open in a sheet.
+  function openAlternatives(unitId) {
+    const unit = view.units?.[unitId];
+    if (!unit?.alt) return;
+    try {
+      localStorage.setItem(TAP_HINT_KEY, '1');
+    } catch {
+      /* blocked storage: the hint just shows again next time */
+    }
+    setTapHintSeen(true);
+    setAltUnit({ id: unitId, src: unit.src, out: unit.out });
+  }
+
+  // …and picking one swaps that sentence only. The history entry follows the edit.
+  function pickAlternative(text) {
+    if (altUnit && text !== altUnit.out && view.segments) {
+      const swapped = replaceUnit(view.segments, view.units, altUnit.id, text);
+      setView((v) => ({ ...v, text: swapped.text, segments: swapped.segments, units: swapped.units }));
+      if (pending.current) {
+        committed.current = ''; // what was saved is now out of date
+        scheduleCommit({ ...pending.current, translated: swapped.text });
+      }
+    }
+    setAltUnit(null);
   }
 
   // ── from elsewhere: share sheet, "Translate" in the selection menu, links, History ──
@@ -404,6 +473,10 @@ export default function TranslatePage() {
             )}
           </div>
 
+          {stillApplies(suggestion, sourceText) && (
+            <SuggestionChip suggestion={suggestion} onUse={useSuggestion} onDismiss={() => setSuggestion((s) => (s ? { ...s, dismissed: true } : s))} />
+          )}
+
           {view.hint && sourceLang !== 'auto' && (
             <div className="mx-3 mb-1 flex flex-wrap items-center gap-2 rounded-xl bg-accent-soft px-3 py-2 text-sm dark:bg-accent/15" data-testid="hint">
               <span>{t('translate.hint', { language: nameOf(view.hint.language) })}</span>
@@ -457,7 +530,31 @@ export default function TranslatePage() {
                 lang={targetLang}
                 data-testid="result"
               >
-                {view.text}
+                {view.segments && !working
+                  ? view.segments.map((segment, i) =>
+                      isTappable(segment, view.units) ? (
+                        <span
+                          key={i}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => openAlternatives(segment.u)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              openAlternatives(segment.u);
+                            }
+                          }}
+                          title={t('alternatives.title')}
+                          data-testid="sentence"
+                          className="cursor-pointer rounded-md decoration-accent/40 decoration-dotted underline-offset-4 transition-colors hover:bg-accent-soft hover:underline dark:hover:bg-accent/20"
+                        >
+                          {segment.t}
+                        </span>
+                      ) : (
+                        <span key={i}>{segment.t}</span>
+                      )
+                    )
+                  : view.text}
               </p>
             ) : (
               <p className="pane-text text-neutral-400" data-testid="result-placeholder">
@@ -471,6 +568,12 @@ export default function TranslatePage() {
               </span>
             )}
           </div>
+
+          {!tapHintSeen && view.status === 'done' && tappableCount(view.segments, view.units) > 0 && (
+            <p className="px-4 pb-1 text-xs text-neutral-500 dark:text-neutral-400" data-testid="tap-hint">
+              {t('translate.tapHint')}
+            </p>
+          )}
 
           <div className="flex items-center gap-1 px-2 pb-2 pt-1">
             {view.text && view.status !== 'error' && (
@@ -509,6 +612,17 @@ export default function TranslatePage() {
 
       <EngineNotice preparing={view.preparing} languages={languages} />
       {!prefs.live && !hasText && <p className="mt-3 px-1 text-xs text-neutral-500">{t('translate.liveOff')}</p>}
+
+      {altUnit && (
+        <AlternativesSheet
+          unit={altUnit}
+          source={resolvedSource || 'auto'}
+          target={targetLang}
+          targetRtl={!!targetMeta?.rtl}
+          onPick={pickAlternative}
+          onClose={() => setAltUnit(null)}
+        />
+      )}
     </div>
   );
 }

@@ -68,7 +68,8 @@ function createApp({ config, db, engine }) {
     '/api/translate',
     requireAuth,
     generalLimit,
-    (req, res, next) => (req.method === 'POST' && req.path === '/' ? translateLimit(req, res, next) : next()),
+    // translating and asking for alternatives are the same CPU work: both count against the translate limit
+    (req, res, next) => (req.method === 'POST' && (req.path === '/' || req.path === '/alternatives') ? translateLimit(req, res, next) : next()),
     wrap(createTranslateRoutes({ engine, db, config, languages }))
   );
   app.use('/api/history', requireAuth, generalLimit, wrap(createHistoryRoutes({ db, config })));
